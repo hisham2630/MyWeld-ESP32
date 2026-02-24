@@ -40,6 +40,9 @@ static bool     s_authenticated = false;  // Reset on every disconnect
 static uint16_t s_conn_handle = 0;
 static uint16_t s_status_attr_handle = 0;
 
+// Forward declaration — defined later in this file
+static int gap_event_cb(struct ble_gap_event *event, void *arg);
+
 // ============================================================================
 // UUIDs (same as V1 — no change needed)
 // ============================================================================
@@ -293,8 +296,29 @@ static int params_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             if (strncmp(g_settings.ble_name, p->ble_name, sizeof(p->ble_name)) != 0) {
                 strncpy(g_settings.ble_name, p->ble_name, sizeof(g_settings.ble_name) - 1);
                 g_settings.ble_name[sizeof(g_settings.ble_name) - 1] = '\0';
-                // Apply name immediately — no restart required
+
+                // Update the GAP service name record
                 ble_svc_gap_device_name_set(g_settings.ble_name);
+
+                // Re-apply advertising data so scanners see the new name immediately
+                // without requiring a device reboot.
+                ble_gap_adv_stop();
+                struct ble_hs_adv_fields fields = {0};
+                fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+                fields.name = (uint8_t *)g_settings.ble_name;
+                fields.name_len = strlen(g_settings.ble_name);
+                fields.name_is_complete = 1;
+                fields.uuids128 = (ble_uuid128_t[]) { svc_uuid };
+                fields.num_uuids128 = 1;
+                fields.uuids128_is_complete = 1;
+                ble_gap_adv_set_fields(&fields);
+
+                struct ble_gap_adv_params adv_params = {0};
+                adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
+                adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+                ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER,
+                                  &adv_params, gap_event_cb, NULL);
+
                 ESP_LOGI(TAG, "BLE device name updated to: '%s'", g_settings.ble_name);
             }
         }
@@ -342,7 +366,7 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 {
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
 
-    uint8_t buf[64];
+    uint8_t buf[256];
     uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
     if (len >= sizeof(buf)) len = sizeof(buf) - 1;
     os_mbuf_copydata(ctxt->om, 0, len, buf);
@@ -355,6 +379,30 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     if (!validate_packet(buf, len, &msg_type, &payload, &payload_len)) {
         ESP_LOGW(TAG, "Invalid CMD packet (len=%d)", len);
         send_nak(BLE_MSG_CMD, BLE_ERR_UNKNOWN_CMD);
+        return 0;
+    }
+
+    if (msg_type == BLE_MSG_PRESET_LIST) {
+        // Authentication required to read preset names
+        if (!s_authenticated) {
+            send_nak(BLE_MSG_PRESET_LIST, BLE_ERR_AUTH_REQUIRED);
+            return 0;
+        }
+        // Build response: 10 × 20 byte name slots
+        ble_preset_list_resp_t resp;
+        memset(&resp, 0, sizeof(resp));
+        for (int i = 0; i < BLE_MAX_PRESETS && i < MAX_PRESETS; i++) {
+            strncpy(resp.names[i], g_settings.presets[i].name, BLE_PRESET_NAME_LEN - 1);
+        }
+        // Packet: HEADER(3) + 200 bytes payload + CRC(1) = 204 bytes
+        uint8_t pkt[BLE_PROTO_HEADER_SIZE + sizeof(resp) + BLE_PROTO_CRC_SIZE];
+        int pkt_len = ble_proto_build_packet(pkt, BLE_MSG_PRESET_LIST_RESP,
+                                              (const uint8_t *)&resp, sizeof(resp));
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(pkt, pkt_len);
+        if (om) {
+            ble_gatts_notify_custom(s_conn_handle, s_status_attr_handle, om);
+        }
+        ESP_LOGI(TAG, "Sent preset list (%d presets)", BLE_MAX_PRESETS);
         return 0;
     }
 

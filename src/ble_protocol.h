@@ -126,6 +126,18 @@ typedef struct __attribute__((packed)) {
     char     build_date[8];     // "YYMMDD\0\0" format
 } ble_version_packet_t;         // Total: 12 bytes
 
+/**
+ * PRESET_LIST_RESP payload (BLE_MSG_PRESET_LIST_RESP) — 200 bytes.
+ * Sent in response to BLE_MSG_PRESET_LIST request.
+ * Each name slot is 20 bytes, null-terminated and zero-padded.
+ */
+#define BLE_PRESET_NAME_LEN     20
+#define BLE_MAX_PRESETS         10
+
+typedef struct __attribute__((packed)) {
+    char names[BLE_MAX_PRESETS][BLE_PRESET_NAME_LEN]; // 10 × 20 = 200 bytes
+} ble_preset_list_resp_t;       // Total: 200 bytes
+
 // ============================================================================
 // CRC Calculation
 // ============================================================================
