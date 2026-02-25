@@ -21,18 +21,28 @@ static nvs_handle_t s_nvs_handle = 0;
 static esp_timer_handle_t s_save_timer = NULL;
 static bool s_dirty = false;
 
-// Factory default presets
+// Factory default presets (7 factory read-only + 13 user-customisable)
 static const weld_preset_t factory_presets[MAX_PRESETS] = {
-    { "0.1mm Nickel",     3.0f,  5.0f,  5.0f,  0.5f, false },
-    { "0.15mm Nickel",    5.0f,  8.0f,  8.0f,  0.5f, false },
-    { "0.2mm Nickel",     8.0f, 10.0f, 12.0f,  0.5f, false },
-    { "0.3mm Nickel",    12.0f, 12.0f, 18.0f,  0.6f, false },
-    { "0.5mm Nickel",    18.0f, 15.0f, 25.0f,  0.8f, false },
-    { "Stainless Steel", 20.0f, 15.0f, 30.0f,  0.8f, false },
-    { "Aluminum",        25.0f, 12.0f, 35.0f,  0.8f, false },
-    { "Custom 1",        10.0f, 10.0f, 10.0f,  0.5f, false },
-    { "Custom 2",        10.0f, 10.0f, 10.0f,  0.5f, false },
-    { "Custom 3",        10.0f, 10.0f, 10.0f,  0.5f, false },
+    { "0.1mm Nickel",     3.0f,  5.0f,  5.0f,  0.5f, false },  // 0
+    { "0.15mm Nickel",    5.0f,  8.0f,  8.0f,  0.5f, false },  // 1
+    { "0.2mm Nickel",     8.0f, 10.0f, 12.0f,  0.5f, false },  // 2
+    { "0.3mm Nickel",    12.0f, 12.0f, 18.0f,  0.6f, false },  // 3
+    { "0.5mm Nickel",    18.0f, 15.0f, 25.0f,  0.8f, false },  // 4
+    { "Stainless Steel", 20.0f, 15.0f, 30.0f,  0.8f, false },  // 5
+    { "Aluminum",        25.0f, 12.0f, 35.0f,  0.8f, false },  // 6 (last factory)
+    { "Custom 1",        10.0f, 10.0f, 10.0f,  0.5f, false },  // 7
+    { "Custom 2",        10.0f, 10.0f, 10.0f,  0.5f, false },  // 8
+    { "Custom 3",        10.0f, 10.0f, 10.0f,  0.5f, false },  // 9
+    { "Custom 4",        10.0f, 10.0f, 10.0f,  0.5f, false },  // 10
+    { "Custom 5",        10.0f, 10.0f, 10.0f,  0.5f, false },  // 11
+    { "Custom 6",        10.0f, 10.0f, 10.0f,  0.5f, false },  // 12
+    { "Custom 7",        10.0f, 10.0f, 10.0f,  0.5f, false },  // 13
+    { "Custom 8",        10.0f, 10.0f, 10.0f,  0.5f, false },  // 14
+    { "Custom 9",        10.0f, 10.0f, 10.0f,  0.5f, false },  // 15
+    { "Custom 10",       10.0f, 10.0f, 10.0f,  0.5f, false },  // 16
+    { "Custom 11",       10.0f, 10.0f, 10.0f,  0.5f, false },  // 17
+    { "Custom 12",       10.0f, 10.0f, 10.0f,  0.5f, false },  // 18
+    { "Custom 13",       10.0f, 10.0f, 10.0f,  0.5f, false },  // 19
 };
 
 static void settings_load_defaults(void)

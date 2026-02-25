@@ -436,8 +436,11 @@ void display_init(void) {
   vTaskDelay(pdMS_TO_TICKS(20));
 
   // ── 5. Backlight ───────────────────────────────────────────────────────────
+  // Configure LEDC but keep duty = 0 (backlight OFF).
+  // display_enable_backlight() is called by ui_task() AFTER the first LVGL
+  // frame is flushed, so the user never sees GRAM garbage through the backlight.
   start_backlight();
-  display_set_brightness(s_brightness);
+  // DO NOT call display_set_brightness() here — backlight stays dark.
 
   // ── 6. I2C & Touch ─────────────────────────────────────────────────────────
   i2c_config_t i2c_conf = {
@@ -446,7 +449,7 @@ void display_init(void) {
       .sda_pullup_en    = GPIO_PULLUP_DISABLE, // board has hardware pull-ups
       .scl_io_num       = PIN_TOUCH_SCL,
       .scl_pullup_en    = GPIO_PULLUP_DISABLE,
-      .master.clk_speed = 400000,
+      .master.clk_speed = 800000,  // 800 kHz fast-mode+ — reduces read latency
   };
   i2c_param_config(I2C_NUM_0, &i2c_conf);
   i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0);
@@ -516,6 +519,25 @@ void display_init(void) {
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, lvgl_touch_read_cb);
 
+  // ── Indev tuning (LVGL 9.x runtime API) ────────────────────────────────────
+  // LVGL 9.x hardcodes LV_INDEV_DEF_* inside lv_indev.c and ignores lv_conf.h
+  // for these values. The only way to override is via the API after lv_indev_create().
+
+  // Poll rate: 10 ms (100 Hz). Default = LV_DEF_REFR_PERIOD = 16 ms.
+  lv_timer_set_period(lv_indev_get_read_timer(indev), 10);
+
+  // Long-press: 300 ms instead of 400 ms — snappier button response.
+  lv_indev_set_long_press_time(indev, 300);
+
+  // Long-press repeat: 80 ms instead of 100 ms — faster auto-repeat on +/- buttons.
+  lv_indev_set_long_press_repeat_time(indev, 80);
+
+  // Scroll limit: 5 px instead of 10 px.
+  // Lowers the distance a finger must travel before LVGL switches from
+  // "tap" to "scroll" mode. Prevents short taps on small buttons from
+  // being silently eaten by the scroll detector.
+  lv_indev_set_scroll_limit(indev, 5);
+
   ESP_LOGI(TAG, "Display initialized: 480x320 landscape LVGL, 90 CW SW-rotation to 320x480 portrait panel");
 }
 
@@ -532,6 +554,14 @@ void display_set_brightness(uint8_t percent) {
 }
 
 uint8_t display_get_brightness(void) { return s_brightness; }
+
+void display_enable_backlight(void) {
+  // Called once by ui_task() after the first LVGL frame is flushed.
+  // Ramps backlight to the saved brightness so the panel is clean before
+  // becoming visible — eliminates GRAM garbage visible at power-on.
+  display_set_brightness(s_brightness);
+  ESP_LOGI(TAG, "Backlight enabled at %d%%", s_brightness);
+}
 
 // ============================================================================
 // LVGL lock / unlock (called from other tasks via ui_ API)

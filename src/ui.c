@@ -17,6 +17,7 @@
 #include "ble_serial.h"
 #include "display.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -38,18 +39,19 @@ typedef enum {
     UI_MSG_WELD_STATE,
     UI_MSG_WELD_COUNT,
     UI_MSG_GRAPH_POINT,
-    UI_MSG_REFRESH_PARAMS,  // Re-sync all param labels from g_settings (BLE write)
+    UI_MSG_REFRESH_PARAMS,          // Re-sync all param labels from g_settings (BLE write)
+    UI_MSG_REBOOT_COUNTDOWN,        // Show factory-reset countdown then reboot
 } ui_msg_type_t;
 
 typedef struct {
     ui_msg_type_t type;
     union {
-        float    voltage;          // UI_MSG_VOLTAGE, UI_MSG_GRAPH_POINT
-        uint8_t  weld_state;       // UI_MSG_WELD_STATE
+        float    voltage;           // UI_MSG_VOLTAGE, UI_MSG_GRAPH_POINT
+        uint8_t  weld_state;        // UI_MSG_WELD_STATE
         struct {
             uint32_t session;
             uint32_t total;
-        } weld_count;              // UI_MSG_WELD_COUNT
+        } weld_count;               // UI_MSG_WELD_COUNT
     };
 } ui_msg_t;
 
@@ -84,6 +86,12 @@ static QueueHandle_t s_ui_queue = NULL;
 
 static lv_obj_t *scr_main = NULL;     // Main dashboard
 static lv_obj_t *scr_settings = NULL; // Settings page
+
+// Countdown overlay (factory reset reboot)
+static lv_obj_t    *scr_countdown   = NULL;
+static lv_obj_t    *lbl_countdown   = NULL;
+static lv_timer_t  *tmr_countdown   = NULL;
+static int          s_countdown_val = 3;
 
 // Main screen widgets
 static lv_obj_t *lbl_voltage = NULL;
@@ -613,6 +621,32 @@ void ui_init(void) {
   ESP_LOGI(TAG, "UI initialized: main dashboard + settings");
 }
 
+// ============================================================================
+// Countdown Timer Callback (factory reset reboot sequence)
+// ============================================================================
+
+static void countdown_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    s_countdown_val--;
+    if (s_countdown_val > 0) {
+        // Update digit and play beep each second
+        if (lbl_countdown) {
+            lv_label_set_text_fmt(lbl_countdown, "%d", s_countdown_val);
+        }
+        audio_play_beep();
+    } else {
+        // Countdown finished — clean up and reboot
+        if (tmr_countdown) {
+            lv_timer_delete(tmr_countdown);
+            tmr_countdown = NULL;
+        }
+        ESP_LOGW(TAG, "Factory reset countdown complete — rebooting now");
+        vTaskDelay(pdMS_TO_TICKS(200)); // Let final frame flush to display
+        esp_restart();
+    }
+}
+
 void ui_task(void *pvParameters) {
   ESP_LOGI(TAG, "UI task started on Core %d", xPortGetCoreID());
 
@@ -637,6 +671,10 @@ void ui_task(void *pvParameters) {
 
   // Seed the tick counter so the first lv_tick_inc() delta is correct.
   int64_t last_tick_us = esp_timer_get_time();
+
+  // Backlight is kept OFF during display_init() to hide GRAM garbage.
+  // We enable it after the first frame is fully flushed to the panel.
+  bool backlight_enabled = false;
 
   while (1) {
     // ── Advance LVGL tick ───────────────────────────────────────────────────
@@ -753,6 +791,60 @@ void ui_task(void *pvParameters) {
           break;
         }
 
+        case UI_MSG_REBOOT_COUNTDOWN: {
+          // ── Build full-screen countdown overlay ────────────────────────────
+          // Kill any previous countdown timer if re-triggered
+          if (tmr_countdown) {
+            lv_timer_delete(tmr_countdown);
+            tmr_countdown = NULL;
+          }
+          if (scr_countdown) {
+            lv_obj_del(scr_countdown);
+            scr_countdown = NULL;
+            lbl_countdown = NULL;
+          }
+
+          s_countdown_val = 3;
+
+          // Full-screen dark overlay
+          scr_countdown = lv_obj_create(NULL);
+          lv_obj_set_style_bg_color(scr_countdown, lv_color_hex(0x0D0D1A), 0);
+          lv_obj_clear_flag(scr_countdown, LV_OBJ_FLAG_SCROLLABLE);
+
+          // "Factory Resetting" header label
+          lv_obj_t *lbl_title = lv_label_create(scr_countdown);
+          lv_label_set_text(lbl_title, LV_SYMBOL_WARNING " Factory Reset");
+          lv_obj_set_style_text_color(lbl_title, lv_color_hex(0xFF4444), 0);
+          lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_24, 0);
+          lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 0, 30);
+
+          // Sub-label "Rebooting in..."
+          lv_obj_t *lbl_sub = lv_label_create(scr_countdown);
+          lv_label_set_text(lbl_sub, "Rebooting in...");
+          lv_obj_set_style_text_color(lbl_sub, lv_color_hex(0xAAAAAA), 0);
+          lv_obj_set_style_text_font(lbl_sub, &lv_font_montserrat_16, 0);
+          lv_obj_align(lbl_sub, LV_ALIGN_CENTER, 0, -30);
+
+          // Large countdown digit
+          lbl_countdown = lv_label_create(scr_countdown);
+          lv_label_set_text(lbl_countdown, "3");
+          lv_obj_set_style_text_color(lbl_countdown, lv_color_hex(0xFF4444), 0);
+          lv_obj_set_style_text_font(lbl_countdown, &lv_font_montserrat_48, 0);
+          lv_obj_align(lbl_countdown, LV_ALIGN_CENTER, 0, 30);
+
+          // Load the overlay immediately
+          lv_scr_load(scr_countdown);
+
+          // Beep to alert the user
+          audio_play_beep();
+
+          // LVGL timer fires every 1 second — callback decrements the digit
+          tmr_countdown = lv_timer_create(countdown_timer_cb, 1000, NULL);
+
+          ESP_LOGI(TAG, "Factory reset countdown started (3s)");
+          break;
+        }
+
         default: break;
       }
     }
@@ -763,6 +855,14 @@ void ui_task(void *pvParameters) {
     uint32_t ms_to_next = lv_timer_handler();
     if (ms_to_next < 1)  ms_to_next = 1;
     if (ms_to_next > 10) ms_to_next = 10;
+
+    // Enable backlight after the first complete frame is flushed.
+    // The panel now shows clean UI pixels \u2014 no GRAM garbage visible.
+    if (!backlight_enabled) {
+      display_enable_backlight();
+      backlight_enabled = true;
+    }
+
     vTaskDelay(pdMS_TO_TICKS(ms_to_next));
   }
 }
@@ -806,6 +906,16 @@ void ui_refresh_params(void) {
   ui_msg_t msg = { .type = UI_MSG_REFRESH_PARAMS };
   // Use a short timeout so the BLE callback (NimBLE task) doesn't block long.
   xQueueSend(s_ui_queue, &msg, pdMS_TO_TICKS(5));
+}
+
+void ui_trigger_reboot_countdown(void) {
+  if (!s_ui_queue) {
+    // Queue not up yet — reboot immediately as last resort
+    esp_restart();
+    return;
+  }
+  ui_msg_t msg = { .type = UI_MSG_REBOOT_COUNTDOWN };
+  xQueueSend(s_ui_queue, &msg, pdMS_TO_TICKS(50));
 }
 
 void ui_set_theme(uint8_t theme) {

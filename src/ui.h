@@ -93,4 +93,11 @@ void ui_refresh_params(void);
  */
 void ui_show_notification(const char *message, uint16_t duration_ms);
 
+/**
+ * Trigger factory-reset countdown: shows a full-screen overlay with
+ * "Factory Reset — Rebooting in... 3 2 1" then calls esp_restart().
+ * Thread-safe: posts a message to the UI queue.
+ */
+void ui_trigger_reboot_countdown(void);
+
 #endif // UI_H

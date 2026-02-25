@@ -142,7 +142,7 @@
 // ============================================================================
 // Preset Configuration
 // ============================================================================
-#define MAX_PRESETS           10
+#define MAX_PRESETS           20   // 7 factory (read-only) + 13 user-custom
 #define PRESET_NAME_LEN      20
 
 // Preset data structure
@@ -152,7 +152,7 @@ typedef struct {
     float t;                     // Pause duration (ms)
     float p2;                    // Pulse 2 duration (ms), 0 = single pulse
     float s_value;               // AUTO mode contact delay (seconds)
-    bool  auto_mode;             // true = AUTO, false = MAN
+    bool     auto_mode;          // true = AUTO, false = MAN
 } weld_preset_t;
 
 // ============================================================================

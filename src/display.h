@@ -18,6 +18,13 @@ void display_set_brightness(uint8_t percent);
 uint8_t display_get_brightness(void);
 
 /**
+ * Enable the backlight at the saved brightness level.
+ * Must be called ONCE by ui_task() after the first LVGL frame is flushed
+ * to the panel, so GRAM garbage is never visible through the backlight.
+ */
+void display_enable_backlight(void);
+
+/**
  * Lock/unlock LVGL mutex for thread-safe UI updates from other tasks.
  * MUST be used when calling any lv_* function from outside the UI task.
  */

@@ -57,6 +57,10 @@ static uint8_t s_debounce_count = 0;  // Button debounce counter
 // Set TRUE after weld fires, cleared only when contact is RELEASED
 static bool s_auto_fired = false;
 
+// MAN mode: one-shot flag — prevents re-firing while trigger button is held
+// Set TRUE after weld fires, cleared only when button is RELEASED
+static bool s_man_fired = false;
+
 // Was caps charged on last check?
 static bool s_was_ready = false;
 
@@ -283,9 +287,10 @@ void welding_task(void *pvParameters)
         // ==============================================
 
         if (g_weld_state == WELD_STATE_IDLE || g_weld_state == WELD_STATE_ARMED) {
-            // --- MAN Mode: Physical button trigger (with debounce) ---
+            // --- MAN Mode: Physical button trigger (with debounce + one-shot) ---
             if (!g_settings.auto_mode) {
                 bool btn_raw = (gpio_get_level(PIN_START) == 0); // Active LOW
+
                 // Debounce: require stable reading for DEBOUNCE_MS / 10ms = N cycles
                 if (btn_raw != s_start_btn_prev) {
                     s_debounce_count++;
@@ -294,15 +299,26 @@ void welding_task(void *pvParameters)
                         bool was_pressed = s_start_btn_prev;
                         s_start_btn_prev = btn_pressed;
                         s_debounce_count = 0;
-                        // Falling edge (button just pressed, active LOW)
+
                         if (btn_pressed && !was_pressed) {
-                            if (!g_weld_status.low_voltage_block && !g_weld_status.protection_fault) {
-                                welding_fire_pulse();
-                            } else {
-                                audio_play_error();
-                                ESP_LOGW(TAG, "MAN trigger blocked: lowV=%d protFault=%d",
-                                         g_weld_status.low_voltage_block,
-                                         g_weld_status.protection_fault);
+                            // FALLING EDGE — button just pressed
+                            if (!s_man_fired) { // One-shot: ignore if already fired this press
+                                if (!g_weld_status.low_voltage_block && !g_weld_status.protection_fault) {
+                                    welding_fire_pulse();
+                                    s_man_fired = true; // Block re-fire until button released
+                                    ESP_LOGI(TAG, "MAN: Weld fired, waiting for button release");
+                                } else {
+                                    audio_play_error();
+                                    ESP_LOGW(TAG, "MAN trigger blocked: lowV=%d protFault=%d",
+                                             g_weld_status.low_voltage_block,
+                                             g_weld_status.protection_fault);
+                                }
+                            }
+                        } else if (!btn_pressed && was_pressed) {
+                            // RISING EDGE — button released: clear one-shot lock
+                            if (s_man_fired) {
+                                s_man_fired = false;
+                                ESP_LOGI(TAG, "MAN: Button released, ready for next weld");
                             }
                         }
                     }

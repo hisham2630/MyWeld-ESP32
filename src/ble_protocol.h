@@ -22,7 +22,7 @@
 #define BLE_PROTO_SYNC          0xAA    // Packet start marker
 #define BLE_PROTO_HEADER_SIZE   3       // SYNC + TYPE + LEN
 #define BLE_PROTO_CRC_SIZE      1       // CRC byte
-#define BLE_PROTO_MAX_PAYLOAD   240     // Maximum payload size
+#define BLE_PROTO_MAX_PAYLOAD   420     // Max payload; preset list = 20×20 = 400 bytes
 
 // ============================================================================
 // Message Types
@@ -127,16 +127,24 @@ typedef struct __attribute__((packed)) {
 } ble_version_packet_t;         // Total: 12 bytes
 
 /**
- * PRESET_LIST_RESP payload (BLE_MSG_PRESET_LIST_RESP) — 200 bytes.
- * Sent in response to BLE_MSG_PRESET_LIST request.
- * Each name slot is 20 bytes, null-terminated and zero-padded.
+ * PRESET_LIST_RESP payload (BLE_MSG_PRESET_LIST_RESP) — paginated, 201 bytes per page.
+ * Sent in response to BLE_MSG_PRESET_LIST request (firmware sends 2 notifications).
+ *
+ * Payload layout per packet:
+ *   [0]      page_index  (0 = slots 0–9, 1 = slots 10–19)
+ *   [1–200]  names: 10 × 20 bytes, each null-terminated and zero-padded
+ *
+ * Total: 201 bytes payload per page, 2 pages → 20 presets.
+ * 201 bytes fits in the 1-byte LEN field (max 255) and one BLE MTU frame.
  */
 #define BLE_PRESET_NAME_LEN     20
-#define BLE_MAX_PRESETS         10
+#define BLE_MAX_PRESETS         20
+#define BLE_PRESETS_PER_PAGE    10   // Presets per PRESET_LIST_RESP packet
 
 typedef struct __attribute__((packed)) {
-    char names[BLE_MAX_PRESETS][BLE_PRESET_NAME_LEN]; // 10 × 20 = 200 bytes
-} ble_preset_list_resp_t;       // Total: 200 bytes
+    uint8_t page_index;                                    // 0 or 1
+    char    names[BLE_PRESETS_PER_PAGE][BLE_PRESET_NAME_LEN]; // 10 × 20 = 200 bytes
+} ble_preset_list_resp_t;       // Total payload: 201 bytes
 
 // ============================================================================
 // CRC Calculation

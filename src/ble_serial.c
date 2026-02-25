@@ -388,21 +388,25 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             send_nak(BLE_MSG_PRESET_LIST, BLE_ERR_AUTH_REQUIRED);
             return 0;
         }
-        // Build response: 10 × 20 byte name slots
-        ble_preset_list_resp_t resp;
-        memset(&resp, 0, sizeof(resp));
-        for (int i = 0; i < BLE_MAX_PRESETS && i < MAX_PRESETS; i++) {
-            strncpy(resp.names[i], g_settings.presets[i].name, BLE_PRESET_NAME_LEN - 1);
+        // Send preset names in 2 paged notifications (10 presets × 20 bytes each = 201b/page)
+        for (uint8_t page = 0; page < (BLE_MAX_PRESETS / BLE_PRESETS_PER_PAGE); page++) {
+            ble_preset_list_resp_t resp;
+            memset(&resp, 0, sizeof(resp));
+            resp.page_index = page;
+            int base = page * BLE_PRESETS_PER_PAGE;
+            for (int i = 0; i < BLE_PRESETS_PER_PAGE && (base + i) < MAX_PRESETS; i++) {
+                strncpy(resp.names[i], g_settings.presets[base + i].name,
+                        BLE_PRESET_NAME_LEN - 1);
+            }
+            uint8_t pkt[BLE_PROTO_HEADER_SIZE + sizeof(resp) + BLE_PROTO_CRC_SIZE];
+            int pkt_len = ble_proto_build_packet(pkt, BLE_MSG_PRESET_LIST_RESP,
+                                                  (const uint8_t *)&resp, sizeof(resp));
+            struct os_mbuf *om = ble_hs_mbuf_from_flat(pkt, pkt_len);
+            if (om) {
+                ble_gatts_notify_custom(s_conn_handle, s_status_attr_handle, om);
+            }
         }
-        // Packet: HEADER(3) + 200 bytes payload + CRC(1) = 204 bytes
-        uint8_t pkt[BLE_PROTO_HEADER_SIZE + sizeof(resp) + BLE_PROTO_CRC_SIZE];
-        int pkt_len = ble_proto_build_packet(pkt, BLE_MSG_PRESET_LIST_RESP,
-                                              (const uint8_t *)&resp, sizeof(resp));
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(pkt, pkt_len);
-        if (om) {
-            ble_gatts_notify_custom(s_conn_handle, s_status_attr_handle, om);
-        }
-        ESP_LOGI(TAG, "Sent preset list (%d presets)", BLE_MAX_PRESETS);
+        ESP_LOGI(TAG, "Sent preset list (2 pages, %d presets total)", BLE_MAX_PRESETS);
         return 0;
     }
 
@@ -533,7 +537,8 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         case BLE_CMD_FACTORY_RESET:
             ESP_LOGW(TAG, "Factory reset requested via BLE");
             settings_factory_reset();
-            send_ack(BLE_MSG_CMD);
+            send_ack(BLE_MSG_CMD);              // Notify app before reboot
+            ui_trigger_reboot_countdown();      // 3-2-1 on screen, then esp_restart()
             break;
 
         case BLE_CMD_RESET_WELD_COUNTER: {
