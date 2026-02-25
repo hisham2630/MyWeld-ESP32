@@ -53,8 +53,9 @@ static void settings_load_defaults(void)
     g_settings.s_value = S_VALUE_DEFAULT;
     g_settings.auto_mode = false;
     g_settings.brightness = 80;
+    g_settings.volume = 80;
     g_settings.sound_on = true;
-    g_settings.theme = 0;
+    g_settings.theme = 0; 
     g_settings.session_welds = 0;
     g_settings.total_welds = 0;
     g_settings.active_preset = 1;
@@ -104,6 +105,7 @@ static void settings_load_from_nvs(void)
     uint8_t u8val;
     if (nvs_get_u8(s_nvs_handle, "autoMode", &u8val) == ESP_OK) g_settings.auto_mode = u8val;
     if (nvs_get_u8(s_nvs_handle, "bright", &u8val) == ESP_OK) g_settings.brightness = u8val;
+    if (nvs_get_u8(s_nvs_handle, "vol", &u8val) == ESP_OK) g_settings.volume = u8val;
     if (nvs_get_u8(s_nvs_handle, "soundOn", &u8val) == ESP_OK) g_settings.sound_on = u8val;
     if (nvs_get_u8(s_nvs_handle, "theme", &u8val) == ESP_OK) g_settings.theme = u8val;
     if (nvs_get_u8(s_nvs_handle, "actPreset", &u8val) == ESP_OK) g_settings.active_preset = u8val;
@@ -161,6 +163,7 @@ static void settings_write_to_nvs(void)
     nvs_set_float("sValue", g_settings.s_value);
     nvs_set_u8(s_nvs_handle, "autoMode", g_settings.auto_mode);
     nvs_set_u8(s_nvs_handle, "bright", g_settings.brightness);
+    nvs_set_u8(s_nvs_handle, "vol", g_settings.volume);
     nvs_set_u8(s_nvs_handle, "soundOn", g_settings.sound_on);
     nvs_set_u8(s_nvs_handle, "theme", g_settings.theme);
     nvs_set_u8(s_nvs_handle, "actPreset", g_settings.active_preset);

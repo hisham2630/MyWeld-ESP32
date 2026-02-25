@@ -20,6 +20,7 @@ static const char *TAG = "Audio";
 // I2S handle
 static i2s_chan_handle_t s_tx_handle = NULL;
 static bool s_muted = false;
+static uint8_t s_volume = 80; // Master volume 0–100%
 
 // Audio command queue
 typedef struct {
@@ -99,7 +100,10 @@ static void audio_task(void *pvParameters)
                 // Silence/pause command — just wait
                 vTaskDelay(pdMS_TO_TICKS(cmd.duration_ms));
             } else if (!s_muted) {
-                int16_t amp = cmd.quiet ? 10000 : 16000;  // ~62% vs full amplitude
+                // Scale amplitude by master volume: base 16000 (normal) or 10000 (quiet)
+                int16_t base_amp = cmd.quiet ? 10000 : 16000;
+                int16_t amp = (int16_t)((int32_t)base_amp * s_volume / 100);
+                if (amp < 0) amp = 0;
                 play_sine_tone(cmd.freq_hz, cmd.duration_ms, amp);
             }
         }
@@ -156,6 +160,8 @@ void audio_init(void)
     ESP_ERROR_CHECK(i2s_channel_enable(s_tx_handle));
 
     s_muted = !g_settings.sound_on;
+    s_volume = g_settings.volume;
+    if (s_volume > 100) s_volume = 100;
 
     // Start audio task on Core 1
     xTaskCreatePinnedToCore(audio_task, "audio_task",
@@ -230,4 +236,16 @@ void audio_set_muted(bool muted)
 {
     s_muted = muted;
     ESP_LOGI(TAG, "Audio %s", muted ? "muted" : "unmuted");
+}
+
+void audio_set_volume(uint8_t volume)
+{
+    if (volume > 100) volume = 100;
+    s_volume = volume;
+    ESP_LOGI(TAG, "Audio volume set to %d%%", volume);
+}
+
+uint8_t audio_get_volume(void)
+{
+    return s_volume;
 }

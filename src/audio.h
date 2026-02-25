@@ -79,4 +79,16 @@ bool audio_is_muted(void);
  */
 void audio_set_muted(bool muted);
 
+/**
+ * Set master volume level.
+ * @param volume 0–100%
+ */
+void audio_set_volume(uint8_t volume);
+
+/**
+ * Get current master volume level.
+ * @return 0–100%
+ */
+uint8_t audio_get_volume(void);
+
 #endif // AUDIO_H

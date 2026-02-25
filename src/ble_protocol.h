@@ -93,13 +93,14 @@ typedef struct __attribute__((packed)) {
     uint16_t s_x10;             // S in 0.1s units (e.g., 5 = 0.5s)
     uint8_t  fw_major;          // Firmware major version
     uint8_t  fw_minor;          // Firmware minor version
-    uint8_t  reserved[2];       // Future use, padding to 32 bytes
+    uint8_t  volume;            // Master volume 0–100%
+    uint8_t  reserved;          // Future use, padding to 32 bytes
 } ble_status_packet_t;          // Total: 32 bytes
 
 _Static_assert(sizeof(ble_status_packet_t) == 32, "STATUS packet must be 32 bytes");
 
 /**
- * PARAMS_WRITE payload (BLE_MSG_PARAMS_WRITE) — 28 bytes.
+ * PARAMS_WRITE payload (BLE_MSG_PARAMS_WRITE) — 29 bytes.
  */
 typedef struct __attribute__((packed)) {
     uint16_t p1_x10;            // P1 in 0.1ms units
@@ -109,11 +110,12 @@ typedef struct __attribute__((packed)) {
     uint8_t  auto_mode;         // 0=MAN, 1=AUTO
     uint8_t  sound_on;          // 0=mute, 1=on
     uint8_t  brightness;        // 0–100%
+    uint8_t  volume;            // Master volume 0–100%
     uint8_t  theme;             // 0=dark, 1=light
     char     ble_name[16];      // Device BLE name (null-terminated, padded)
-} ble_params_packet_t;          // Total: 28 bytes
+} ble_params_packet_t;          // Total: 29 bytes
 
-_Static_assert(sizeof(ble_params_packet_t) == 28, "PARAMS packet must be 28 bytes");
+_Static_assert(sizeof(ble_params_packet_t) == 29, "PARAMS packet must be 29 bytes");
 
 /**
  * VERSION_RESPONSE payload (BLE_MSG_VERSION_RESPONSE) — 12 bytes.

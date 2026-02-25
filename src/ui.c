@@ -462,6 +462,14 @@ static void slider_brightness_cb(lv_event_t *e) {
   settings_save();
 }
 
+static void slider_volume_cb(lv_event_t *e) {
+  lv_obj_t *slider = lv_event_get_target(e);
+  g_settings.volume = (uint8_t)lv_slider_get_value(slider);
+  audio_set_volume(g_settings.volume);
+  audio_play_beep(); // Play beep at new volume so user hears the level
+  settings_save();
+}
+
 static void sw_sound_cb(lv_event_t *e) {
   lv_obj_t *sw = lv_event_get_target(e);
   g_settings.sound_on = lv_obj_has_state(sw, LV_STATE_CHECKED);
@@ -566,6 +574,24 @@ static void create_settings_screen(void) {
   lv_obj_set_style_bg_color(slider_br, COLOR_PRIMARY, LV_PART_INDICATOR);
   lv_obj_set_style_bg_color(slider_br, COLOR_TEXT_LIGHT, LV_PART_KNOB);
   lv_obj_add_event_cb(slider_br, slider_brightness_cb, LV_EVENT_VALUE_CHANGED,
+                      NULL);
+  row_y += row_h;
+
+  // ── Volume Slider ───────────────────────────────
+  lv_obj_t *lbl_vol = lv_label_create(scr_settings);
+  lv_label_set_text(lbl_vol, LV_SYMBOL_VOLUME_MAX " Volume:");
+  lv_obj_set_style_text_color(lbl_vol, COLOR_TEXT_LIGHT, 0);
+  lv_obj_set_pos(lbl_vol, 10, row_y + 6);
+
+  lv_obj_t *slider_vol = lv_slider_create(scr_settings);
+  lv_obj_set_size(slider_vol, 250, 16);
+  lv_obj_set_pos(slider_vol, 200, row_y + 8);
+  lv_slider_set_range(slider_vol, 0, 100);
+  lv_slider_set_value(slider_vol, g_settings.volume, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(slider_vol, COLOR_ACCENT, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(slider_vol, COLOR_BLUE, LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(slider_vol, COLOR_TEXT_LIGHT, LV_PART_KNOB);
+  lv_obj_add_event_cb(slider_vol, slider_volume_cb, LV_EVENT_VALUE_CHANGED,
                       NULL);
   row_y += row_h;
 

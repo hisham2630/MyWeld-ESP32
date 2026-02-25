@@ -17,6 +17,7 @@ typedef struct {
 
     // UI settings
     uint8_t brightness;          // Display brightness (0–100)
+    uint8_t volume;              // Master sound volume (0–100%)
     bool    sound_on;            // Audio enable/disable
     uint8_t theme;               // 0 = dark, 1 = light
 

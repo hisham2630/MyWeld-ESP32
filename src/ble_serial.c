@@ -195,6 +195,7 @@ static void build_status_payload(ble_status_packet_t *pkt)
     pkt->s_x10          = (uint16_t)(g_settings.s_value * 10.0f);
     pkt->fw_major       = FW_VERSION_MAJOR;
     pkt->fw_minor       = FW_VERSION_MINOR;
+    pkt->volume         = g_settings.volume;
 }
 
 // ============================================================================
@@ -215,6 +216,7 @@ static int params_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         params.auto_mode = g_settings.auto_mode ? 1 : 0;
         params.sound_on  = g_settings.sound_on ? 1 : 0;
         params.brightness = g_settings.brightness;
+        params.volume    = g_settings.volume;
         params.theme     = g_settings.theme;
         strncpy(params.ble_name, g_settings.ble_name, sizeof(params.ble_name) - 1);
 
@@ -289,7 +291,11 @@ static int params_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         g_settings.auto_mode = p->auto_mode != 0;
         g_settings.sound_on  = p->sound_on != 0;
         g_settings.brightness = p->brightness;
+        g_settings.volume    = p->volume;
         g_settings.theme     = p->theme;
+
+        // Apply volume to audio engine
+        audio_set_volume(g_settings.volume);
 
         // Update BLE name if changed
         if (p->ble_name[0] != '\0') {
