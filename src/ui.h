@@ -94,10 +94,25 @@ void ui_refresh_params(void);
 void ui_show_notification(const char *message, uint16_t duration_ms);
 
 /**
- * Trigger factory-reset countdown: shows a full-screen overlay with
- * "Factory Reset — Rebooting in... 3 2 1" then calls esp_restart().
+ * Trigger reboot countdown: shows a full-screen overlay with
+ * a 3-2-1 countdown, then calls esp_restart().
+ * @param is_factory_reset  true = show "Factory Reset" title,
+ *                          false = show "Rebooting" title.
  * Thread-safe: posts a message to the UI queue.
  */
-void ui_trigger_reboot_countdown(void);
+void ui_trigger_reboot_countdown(bool is_factory_reset);
+
+/**
+ * Show OTA firmware update progress overlay.
+ * Thread-safe: posts to UI queue.
+ * @param percent Progress 0–100
+ */
+void ui_show_ota_progress(uint8_t percent);
+
+/**
+ * Hide OTA progress overlay and return to normal UI.
+ * Thread-safe: posts to UI queue.
+ */
+void ui_hide_ota_progress(void);
 
 #endif // UI_H

@@ -26,6 +26,7 @@
 #include "ble_serial.h"
 #include "config.h"
 #include "display.h"
+#include "ota.h"
 #include "settings.h"
 #include "ui.h"
 #include "welding.h"
@@ -123,6 +124,9 @@ void app_main(void) {
 
   // Load saved settings from NVS
   settings_init();
+
+  // OTA rollback check — mark firmware valid if we booted successfully
+  ota_init();
 
   // ========================================
   // PHASE 3: Peripheral initialization

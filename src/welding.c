@@ -23,6 +23,7 @@
 #include "audio.h"
 #include "ui.h"
 #include "ble_serial.h"
+#include "ota.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
@@ -283,8 +284,20 @@ void welding_task(void *pvParameters)
         }
 
         // ==============================================
-        // Welding Logic (only if not blocked)
+        // Welding Logic (only if not blocked and NOT in OTA)
         // ==============================================
+
+        // SAFETY: Block ALL welding during OTA firmware updates.
+        // Firing during flash writes could corrupt the update AND is dangerous.
+        if (ota_is_active()) {
+            // Force IDLE state and skip all trigger logic during OTA
+            if (g_weld_state == WELD_STATE_ARMED) {
+                g_weld_state = WELD_STATE_IDLE;
+                ui_update_weld_state(WELD_STATE_IDLE);
+            }
+            vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(10));
+            continue;
+        }
 
         if (g_weld_state == WELD_STATE_IDLE || g_weld_state == WELD_STATE_ARMED) {
             // --- MAN Mode: Physical button trigger (with debounce + one-shot) ---

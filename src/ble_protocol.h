@@ -1,6 +1,9 @@
 #ifndef BLE_PROTOCOL_H
 #define BLE_PROTOCOL_H
 
+/* Protocol version — bump when OTA or packet layout changes */
+#define BLE_PROTO_VERSION       3
+
 /**
  * MyWeld BLE Binary Protocol V2 — Shared Header
  *
@@ -23,6 +26,7 @@
 #define BLE_PROTO_HEADER_SIZE   3       // SYNC + TYPE + LEN
 #define BLE_PROTO_CRC_SIZE      1       // CRC byte
 #define BLE_PROTO_MAX_PAYLOAD   420     // Max payload; preset list = 20×20 = 400 bytes
+#define BLE_CHAR_OTA_UUID       0x1238  // OTA characteristic UUID
 
 // ============================================================================
 // Message Types
@@ -43,6 +47,14 @@
 #define BLE_MSG_AUTH_REQUEST        0x0D    // App→ESP: request authentication
 #define BLE_MSG_AUTH_RESPONSE       0x0E    // ESP→App: authentication result
 
+// OTA firmware update messages
+#define BLE_MSG_OTA_BEGIN           0x10    // App→ESP: start OTA (size + SHA256 + version)
+#define BLE_MSG_OTA_DATA            0x11    // App→ESP: firmware chunk (seq + data)
+#define BLE_MSG_OTA_END             0x12    // App→ESP: transfer complete
+#define BLE_MSG_OTA_ACK             0x13    // ESP→App: chunk ACK (status + progress + seq)
+#define BLE_MSG_OTA_ABORT           0x14    // Either: abort OTA (reason)
+#define BLE_MSG_OTA_RESULT          0x15    // ESP→App: final result (success/fail)
+
 // ============================================================================
 // Command Sub-Types (payload byte 0 of BLE_MSG_CMD)
 // ============================================================================
@@ -54,6 +66,26 @@
 #define BLE_CMD_CALIBRATE_ADC       0x05    // [channel, reference_mv_u16]
 #define BLE_CMD_AUTH                0x06    // [pin: ASCII 4 digits + null = 5 bytes]
 #define BLE_CMD_CHANGE_PIN          0x07    // [new_pin: ASCII 4 digits + null = 5 bytes]
+#define BLE_CMD_REBOOT              0x08    // (no extra data) — reboot device
+
+// ============================================================================
+// OTA Error / Status Codes
+// ============================================================================
+
+#define BLE_OTA_STATUS_OK           0x00    // Chunk received OK
+#define BLE_OTA_STATUS_SEQ_ERR      0x01    // Sequence number mismatch
+#define BLE_OTA_STATUS_FLASH_ERR    0x02    // Flash write failed
+#define BLE_OTA_STATUS_BUSY         0x03    // Already in OTA mode
+#define BLE_OTA_STATUS_AUTH_REQ     0x04    // Not authenticated
+#define BLE_OTA_STATUS_TOO_LARGE    0x05    // Firmware too large for partition
+#define BLE_OTA_STATUS_CRC_FAIL     0x06    // SHA256 mismatch after transfer
+#define BLE_OTA_STATUS_ABORT        0x07    // OTA aborted by user/error
+
+// OTA result codes (BLE_MSG_OTA_RESULT payload byte 0)
+#define BLE_OTA_RESULT_SUCCESS      0x00    // OTA OK — rebooting
+#define BLE_OTA_RESULT_CRC_FAIL     0x01    // SHA256 mismatch
+#define BLE_OTA_RESULT_FLASH_ERR    0x02    // Flash write/verify failed
+#define BLE_OTA_RESULT_ABORTED      0x03    // Aborted mid-transfer
 
 // ============================================================================
 // Error Codes (NAK payload byte 1)
@@ -147,6 +179,74 @@ typedef struct __attribute__((packed)) {
     uint8_t page_index;                                    // 0 or 1
     char    names[BLE_PRESETS_PER_PAGE][BLE_PRESET_NAME_LEN]; // 10 × 20 = 200 bytes
 } ble_preset_list_resp_t;       // Total payload: 201 bytes
+
+// ============================================================================
+// OTA Packet Structures
+// ============================================================================
+
+/**
+ * OTA_BEGIN payload (BLE_MSG_OTA_BEGIN) — 39 bytes.
+ * Sent by app to initiate firmware update.
+ */
+typedef struct __attribute__((packed)) {
+    uint32_t total_size;        // Total firmware binary size in bytes
+    uint8_t  sha256[32];        // SHA-256 hash of the entire firmware binary
+    uint8_t  fw_major;          // New firmware version major
+    uint8_t  fw_minor;          // New firmware version minor
+    uint8_t  fw_patch;          // New firmware version patch
+} ble_ota_begin_t;              // Total: 39 bytes
+
+_Static_assert(sizeof(ble_ota_begin_t) == 39, "OTA_BEGIN must be 39 bytes");
+
+/**
+ * OTA_DATA payload (BLE_MSG_OTA_DATA) — 2 + up to 240 bytes.
+ * Sent by app: one chunk of firmware data.
+ */
+#define BLE_OTA_CHUNK_SIZE      240     // Max data bytes per OTA_DATA packet
+
+typedef struct __attribute__((packed)) {
+    uint16_t seq;               // Chunk sequence number (0-based)
+    uint8_t  data[];            // Flexible array member: up to BLE_OTA_CHUNK_SIZE bytes
+} ble_ota_data_t;               // Header: 2 bytes + variable data
+
+/**
+ * OTA_ACK payload (BLE_MSG_OTA_ACK) — 4 bytes.
+ * Sent by ESP32 after receiving each chunk.
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t  status;            // BLE_OTA_STATUS_* code
+    uint8_t  progress;          // 0–100 percent complete
+    uint16_t seq;               // Acknowledged sequence number
+} ble_ota_ack_t;                // Total: 4 bytes
+
+_Static_assert(sizeof(ble_ota_ack_t) == 4, "OTA_ACK must be 4 bytes");
+
+/**
+ * OTA_RESULT payload (BLE_MSG_OTA_RESULT) — 1 byte.
+ * Sent by ESP32 after OTA_END, before reboot.
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t  result;            // BLE_OTA_RESULT_* code
+} ble_ota_result_t;             // Total: 1 byte
+
+/**
+ * OTA_ABORT payload (BLE_MSG_OTA_ABORT) — 1 byte.
+ * Can be sent by either side to cancel OTA.
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t  reason;            // BLE_OTA_STATUS_* or BLE_OTA_RESULT_* code
+} ble_ota_abort_t;              // Total: 1 byte
+
+/**
+ * OTA state machine states (firmware internal, not sent over BLE).
+ */
+typedef enum {
+    OTA_STATE_IDLE = 0,         // No OTA in progress
+    OTA_STATE_RECEIVING,        // Receiving firmware chunks
+    OTA_STATE_VALIDATING,       // All chunks received, validating SHA256
+    OTA_STATE_REBOOTING,        // Validated, about to reboot
+    OTA_STATE_ERROR,            // OTA failed
+} ota_state_t;
 
 // ============================================================================
 // CRC Calculation

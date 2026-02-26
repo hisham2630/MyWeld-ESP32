@@ -16,6 +16,7 @@
 
 #include "ble_serial.h"
 #include "ble_protocol.h"
+#include "ota.h"
 #include "settings.h"
 #include "welding.h"
 #include "audio.h"
@@ -32,6 +33,10 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "BLE";
 
@@ -39,6 +44,22 @@ static bool     s_connected     = false;
 static bool     s_authenticated = false;  // Reset on every disconnect
 static uint16_t s_conn_handle = 0;
 static uint16_t s_status_attr_handle = 0;
+static uint16_t s_ota_attr_handle = 0;   // OTA characteristic notify handle
+
+// ── OTA chunk queue: decouple flash writes from BLE callback ────────────────
+// The BLE callback copies incoming chunk data here and returns immediately.
+// A background FreeRTOS task drains the queue and calls ota_write_chunk.
+#define OTA_Q_DEPTH     32        // Queue depth (32 × 256 = 8 KB RAM)
+#define OTA_Q_DATA_MAX  244       // Max data per chunk (240 + padding)
+
+typedef struct {
+    uint16_t seq;
+    uint16_t data_len;
+    uint8_t  data[OTA_Q_DATA_MAX];
+} ota_q_item_t;
+
+static QueueHandle_t      s_ota_queue  = NULL;
+static TaskHandle_t       s_ota_task   = NULL;
 
 // Forward declaration — defined later in this file
 static int gap_event_cb(struct ble_gap_event *event, void *arg);
@@ -67,6 +88,10 @@ static const ble_uuid128_t chr_status_uuid =
 static const ble_uuid128_t chr_cmd_uuid =
     BLE_UUID128_INIT(0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
                      0x00, 0x10, 0x00, 0x00, 0x37, 0x12, 0x00, 0x00);
+
+static const ble_uuid128_t chr_ota_uuid =
+    BLE_UUID128_INIT(0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
+                     0x00, 0x10, 0x00, 0x00, 0x38, 0x12, 0x00, 0x00);
 
 // ============================================================================
 // Helper: map firmware weld_state_t → protocol state byte
@@ -133,6 +158,23 @@ static void send_nak(uint8_t original_type, uint8_t error_code)
     struct os_mbuf *om = ble_hs_mbuf_from_flat(pkt, pkt_len);
     if (om) {
         ble_gatts_notify_custom(s_conn_handle, s_status_attr_handle, om);
+    }
+}
+
+// ============================================================================
+// Helper: send OTA notification (via OTA characteristic)
+// ============================================================================
+
+static void send_ota_notify(uint8_t msg_type, const uint8_t *payload, uint8_t payload_len)
+{
+    if (!s_connected || s_ota_attr_handle == 0) return;
+
+    uint8_t pkt[BLE_PROTO_HEADER_SIZE + 8 + BLE_PROTO_CRC_SIZE]; // max OTA response is small
+    int pkt_len = ble_proto_build_packet(pkt, msg_type, payload, payload_len);
+
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(pkt, pkt_len);
+    if (om) {
+        ble_gatts_notify_custom(s_conn_handle, s_ota_attr_handle, om);
     }
 }
 
@@ -294,8 +336,12 @@ static int params_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         g_settings.volume    = p->volume;
         g_settings.theme     = p->theme;
 
-        // Apply volume to audio engine
+        // Apply volume and mute state to audio engine
+        audio_set_muted(!g_settings.sound_on);
         audio_set_volume(g_settings.volume);
+
+        // Play a tone so the user hears the new volume level
+        audio_play_beep();
 
         // Update BLE name if changed
         if (p->ble_name[0] != '\0') {
@@ -544,7 +590,7 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             ESP_LOGW(TAG, "Factory reset requested via BLE");
             settings_factory_reset();
             send_ack(BLE_MSG_CMD);              // Notify app before reboot
-            ui_trigger_reboot_countdown();      // 3-2-1 on screen, then esp_restart()
+            ui_trigger_reboot_countdown(true);   // 3-2-1 "Factory Reset" on screen, then esp_restart()
             break;
 
         case BLE_CMD_RESET_WELD_COUNTER: {
@@ -589,9 +635,161 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             break;
         }
 
+        case BLE_CMD_REBOOT: {
+            ESP_LOGI(TAG, "Reboot requested via BLE");
+            send_ack(BLE_MSG_CMD);
+            ui_trigger_reboot_countdown(false);  // 3-2-1 "Rebooting" on screen, then esp_restart()
+            break;
+        }
+
         default:
             ESP_LOGW(TAG, "Unknown CMD sub-command: 0x%02X", sub_cmd);
             send_nak(BLE_MSG_CMD, BLE_ERR_UNKNOWN_CMD);
+            break;
+    }
+
+    return 0;
+}
+
+// ============================================================================
+// OTA characteristic handler (WRITE → OTA commands, NOTIFY → OTA status)
+// ============================================================================
+
+static int ota_access_cb(uint16_t conn_handle, uint16_t attr_handle,
+                         struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
+
+    uint8_t buf[256];
+    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    os_mbuf_copydata(ctxt->om, 0, len, buf);
+
+    // Validate binary packet
+    uint8_t msg_type;
+    const uint8_t *payload;
+    uint8_t payload_len;
+
+    if (!validate_packet(buf, len, &msg_type, &payload, &payload_len)) {
+        ESP_LOGW(TAG, "Invalid OTA packet (len=%d)", len);
+        return 0;
+    }
+
+    switch (msg_type) {
+
+        case BLE_MSG_OTA_BEGIN: {
+            // Require PIN authentication
+            if (!s_authenticated) {
+                ESP_LOGW(TAG, "OTA rejected — not authenticated");
+                ble_ota_ack_t ack = { .status = BLE_OTA_STATUS_AUTH_REQ, .progress = 0, .seq = 0 };
+                send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
+                return 0;
+            }
+
+            if (payload_len < sizeof(ble_ota_begin_t)) {
+                ESP_LOGW(TAG, "OTA_BEGIN too short: %d", payload_len);
+                ble_ota_ack_t ack = { .status = BLE_OTA_STATUS_FLASH_ERR, .progress = 0, .seq = 0 };
+                send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
+                return 0;
+            }
+
+            const ble_ota_begin_t *begin = (const ble_ota_begin_t *)payload;
+            uint8_t result = ota_begin(begin);
+
+            ble_ota_ack_t ack = { .status = result, .progress = 0, .seq = 0 };
+            send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
+
+            if (result == BLE_OTA_STATUS_OK) {
+                ESP_LOGI(TAG, "OTA session started");
+
+                // Request fast connection interval for OTA throughput
+                // Range: 7.5ms min – 15ms max (in 1.25ms units: 6 – 12)
+                struct ble_gap_upd_params conn_params = {0};
+                conn_params.itvl_min = 6;     // 7.5ms
+                conn_params.itvl_max = 12;    // 15ms
+                conn_params.latency  = 0;
+                conn_params.supervision_timeout = 400; // 4 seconds
+                int rc = ble_gap_update_params(s_conn_handle, &conn_params);
+                if (rc == 0) {
+                    ESP_LOGI(TAG, "Requested fast BLE conn interval (7.5–15ms) for OTA");
+                } else {
+                    ESP_LOGW(TAG, "Failed to update conn params: rc=%d", rc);
+                }
+            }
+            break;
+        }
+
+        case BLE_MSG_OTA_DATA: {
+            if (!ota_is_active()) {
+                return 0;
+            }
+
+            if (payload_len < 3) {
+                ble_ota_ack_t ack = { .status = BLE_OTA_STATUS_FLASH_ERR, .progress = ota_get_progress(), .seq = 0 };
+                send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
+                return 0;
+            }
+
+            const ble_ota_data_t *chunk = (const ble_ota_data_t *)payload;
+            uint16_t data_len = payload_len - 2;
+
+            // ── Fast path: copy to queue, return immediately ──
+            // The ota_flush_task handles the slow esp_ota_write.
+            if (s_ota_queue) {
+                ota_q_item_t item;
+                item.seq      = chunk->seq;
+                item.data_len = (data_len > OTA_Q_DATA_MAX) ? OTA_Q_DATA_MAX : data_len;
+                memcpy(item.data, chunk->data, item.data_len);
+
+                if (xQueueSend(s_ota_queue, &item, 0) != pdTRUE) {
+                    // Queue full — fall back to synchronous write
+                    ESP_LOGW(TAG, "OTA queue full at seq=%u, sync fallback", chunk->seq);
+                    uint8_t result = ota_write_chunk(chunk->seq, chunk->data, data_len);
+                    ble_ota_ack_t ack = { .status = result, .progress = ota_get_progress(), .seq = chunk->seq };
+                    send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
+                }
+            } else {
+                // No queue — synchronous (shouldn't happen)
+                uint8_t result = ota_write_chunk(chunk->seq, chunk->data, data_len);
+                ble_ota_ack_t ack = { .status = result, .progress = ota_get_progress(), .seq = chunk->seq };
+                send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
+            }
+            break;
+        }
+
+        case BLE_MSG_OTA_END: {
+            if (!ota_is_active()) {
+                return 0;
+            }
+
+            uint8_t result = ota_finish();
+
+            ble_ota_result_t res = { .result = result };
+            send_ota_notify(BLE_MSG_OTA_RESULT, (const uint8_t *)&res, sizeof(res));
+
+            if (result == BLE_OTA_RESULT_SUCCESS) {
+                ESP_LOGI(TAG, "OTA success! Rebooting in 2 seconds...");
+                // Give BLE time to send the result notification
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                esp_restart();
+            } else {
+                ESP_LOGE(TAG, "OTA failed with result: 0x%02X", result);
+                ota_abort();
+            }
+            break;
+        }
+
+        case BLE_MSG_OTA_ABORT: {
+            ESP_LOGW(TAG, "OTA abort requested by app");
+            ota_abort();
+
+            ble_ota_result_t res = { .result = BLE_OTA_RESULT_ABORTED };
+            send_ota_notify(BLE_MSG_OTA_RESULT, (const uint8_t *)&res, sizeof(res));
+            break;
+        }
+
+        default:
+            ESP_LOGW(TAG, "Unknown OTA msg type: 0x%02X", msg_type);
             break;
     }
 
@@ -626,6 +824,13 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
                 .access_cb = cmd_access_cb,
                 .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
             },
+            {
+                // OTA: firmware update (write chunks, notify progress)
+                .uuid = &chr_ota_uuid.u,
+                .access_cb = ota_access_cb,
+                .val_handle = &s_ota_attr_handle,
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_NOTIFY,
+            },
             { 0 }, // Terminator
         },
     },
@@ -657,6 +862,11 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         case BLE_GAP_EVENT_DISCONNECT:
             s_connected = false;
             s_authenticated = false;  // Force re-auth on next connection
+            // Abort OTA if in progress (disconnect = restart from scratch)
+            if (ota_is_active()) {
+                ESP_LOGW(TAG, "BLE disconnect during OTA — aborting");
+                ota_abort();
+            }
             ESP_LOGI(TAG, "BLE client disconnected, re-advertising");
             // Re-start advertising
             {
@@ -731,11 +941,53 @@ static void ble_on_sync(void)
 }
 
 // ============================================================================
+// OTA Flush Task — writes chunks to flash off the BLE callback thread
+// ============================================================================
+
+#define OTA_ACK_WINDOW 32
+
+static void ota_flush_task(void *arg)
+{
+    ota_q_item_t item;
+    for (;;) {
+        // Block until a chunk arrives
+        if (xQueueReceive(s_ota_queue, &item, portMAX_DELAY) != pdTRUE) continue;
+
+        uint8_t result = ota_write_chunk(item.seq, item.data, item.data_len);
+
+        // Windowed ACK: respond every N chunks, on error, or at 100%
+        bool should_ack = (result != BLE_OTA_STATUS_OK)
+                       || ((item.seq + 1) % OTA_ACK_WINDOW == 0)
+                       || (ota_get_progress() >= 100);
+
+        if (should_ack) {
+            ble_ota_ack_t ack = {
+                .status   = result,
+                .progress = ota_get_progress(),
+                .seq      = item.seq
+            };
+            send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
+        }
+
+        if (result != BLE_OTA_STATUS_OK) {
+            ESP_LOGE(TAG, "OTA flush failed at seq=%u: 0x%02X", item.seq, result);
+        }
+    }
+}
+
+// ============================================================================
 // Public API
 // ============================================================================
 
 void ble_serial_init(void)
 {
+    // Create OTA chunk queue + flush task
+    s_ota_queue = xQueueCreate(OTA_Q_DEPTH, sizeof(ota_q_item_t));
+    if (s_ota_queue) {
+        xTaskCreatePinnedToCore(ota_flush_task, "ota_flush", 4096, NULL, 5, &s_ota_task, 1);
+        ESP_LOGI(TAG, "OTA flush queue created (depth=%d)", OTA_Q_DEPTH);
+    }
+
     // Initialize NimBLE
     esp_err_t ret = nimble_port_init();
     if (ret != ESP_OK) {
@@ -766,6 +1018,9 @@ bool ble_serial_is_connected(void)
 void ble_serial_send_status(void)
 {
     if (!s_connected || s_status_attr_handle == 0) return;
+
+    // Suppress status notifications during OTA to save BLE bandwidth
+    if (ota_is_active()) return;
 
     // Build binary STATUS packet
     ble_status_packet_t status;

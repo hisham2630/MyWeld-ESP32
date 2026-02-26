@@ -7,6 +7,7 @@ idf_component_register(
         "display.c"
         "ui.c"
         "ble_serial.c"
+        "ota.c"
         "esp_lcd_axs15231b.c"
         "esp_lcd_touch.c"
     INCLUDE_DIRS
@@ -20,4 +21,7 @@ idf_component_register(
         esp_event
         bt
         esp_lcd
+        app_update
+        mbedtls
+        esp_partition
 )

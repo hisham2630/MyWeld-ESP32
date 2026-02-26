@@ -40,7 +40,9 @@ typedef enum {
     UI_MSG_WELD_COUNT,
     UI_MSG_GRAPH_POINT,
     UI_MSG_REFRESH_PARAMS,          // Re-sync all param labels from g_settings (BLE write)
-    UI_MSG_REBOOT_COUNTDOWN,        // Show factory-reset countdown then reboot
+    UI_MSG_REBOOT_COUNTDOWN,        // Show reboot countdown (factory-reset or normal)
+    UI_MSG_OTA_PROGRESS,            // OTA firmware update progress (0–100)
+    UI_MSG_OTA_HIDE,                // Hide OTA overlay
 } ui_msg_type_t;
 
 typedef struct {
@@ -52,6 +54,8 @@ typedef struct {
             uint32_t session;
             uint32_t total;
         } weld_count;               // UI_MSG_WELD_COUNT
+        uint8_t  ota_progress;      // UI_MSG_OTA_PROGRESS (0–100)
+        bool     is_factory_reset;  // UI_MSG_REBOOT_COUNTDOWN
     };
 } ui_msg_t;
 
@@ -87,11 +91,16 @@ static QueueHandle_t s_ui_queue = NULL;
 static lv_obj_t *scr_main = NULL;     // Main dashboard
 static lv_obj_t *scr_settings = NULL; // Settings page
 
-// Countdown overlay (factory reset reboot)
+// Countdown overlay (reboot / factory reset)
 static lv_obj_t    *scr_countdown   = NULL;
 static lv_obj_t    *lbl_countdown   = NULL;
 static lv_timer_t  *tmr_countdown   = NULL;
 static int          s_countdown_val = 3;
+
+// OTA progress overlay
+static lv_obj_t    *scr_ota         = NULL;
+static lv_obj_t    *lbl_ota_pct     = NULL;
+static lv_obj_t    *bar_ota         = NULL;
 
 // Main screen widgets
 static lv_obj_t *lbl_voltage = NULL;
@@ -104,6 +113,13 @@ static lv_obj_t *lbl_preset = NULL;
 static lv_obj_t *chart_voltage = NULL;
 static lv_chart_series_t *chart_series = NULL;
 static lv_obj_t *volt_container = NULL;  // promoted to global for mode-toggle repositioning
+static lv_obj_t *lbl_ble_icon = NULL;    // BLE connected indicator (shown/hidden)
+
+// Settings screen widgets (stored globally so BLE refresh can update them)
+static lv_obj_t *slider_brightness = NULL;
+static lv_obj_t *slider_volume = NULL;
+static lv_obj_t *sw_sound_global = NULL;
+static lv_obj_t *sw_theme_global = NULL;
 
 // Parameter cards
 typedef struct {
@@ -316,6 +332,14 @@ static void create_main_screen(void) {
   lv_obj_align(lbl_mode, LV_ALIGN_RIGHT_MID, -5, 0);
   lv_obj_add_flag(lbl_mode, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(lbl_mode, btn_mode_toggle_cb, LV_EVENT_CLICKED, NULL);
+
+  // BLE connected icon (hidden until a client connects)
+  lbl_ble_icon = lv_label_create(status_bar);
+  lv_label_set_text(lbl_ble_icon, LV_SYMBOL_BLUETOOTH);
+  lv_obj_set_style_text_color(lbl_ble_icon, COLOR_BLUE, 0);
+  lv_obj_set_style_text_font(lbl_ble_icon, &lv_font_montserrat_16, 0);
+  lv_obj_align(lbl_ble_icon, LV_ALIGN_RIGHT_MID, -58, 0);
+  lv_obj_add_flag(lbl_ble_icon, LV_OBJ_FLAG_HIDDEN);
 
   // ── Parameter Cards ──────────────────────────────
   int card_y = 42;
@@ -565,15 +589,15 @@ static void create_settings_screen(void) {
   lv_obj_set_style_text_color(lbl_br, COLOR_TEXT_LIGHT, 0);
   lv_obj_set_pos(lbl_br, 10, row_y + 6);
 
-  lv_obj_t *slider_br = lv_slider_create(scr_settings);
-  lv_obj_set_size(slider_br, 250, 16);
-  lv_obj_set_pos(slider_br, 200, row_y + 8);
-  lv_slider_set_range(slider_br, 10, 100);
-  lv_slider_set_value(slider_br, g_settings.brightness, LV_ANIM_OFF);
-  lv_obj_set_style_bg_color(slider_br, COLOR_ACCENT, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(slider_br, COLOR_PRIMARY, LV_PART_INDICATOR);
-  lv_obj_set_style_bg_color(slider_br, COLOR_TEXT_LIGHT, LV_PART_KNOB);
-  lv_obj_add_event_cb(slider_br, slider_brightness_cb, LV_EVENT_VALUE_CHANGED,
+  slider_brightness = lv_slider_create(scr_settings);
+  lv_obj_set_size(slider_brightness, 250, 16);
+  lv_obj_set_pos(slider_brightness, 200, row_y + 8);
+  lv_slider_set_range(slider_brightness, 10, 100);
+  lv_slider_set_value(slider_brightness, g_settings.brightness, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(slider_brightness, COLOR_ACCENT, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(slider_brightness, COLOR_PRIMARY, LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(slider_brightness, COLOR_TEXT_LIGHT, LV_PART_KNOB);
+  lv_obj_add_event_cb(slider_brightness, slider_brightness_cb, LV_EVENT_VALUE_CHANGED,
                       NULL);
   row_y += row_h;
 
@@ -583,15 +607,15 @@ static void create_settings_screen(void) {
   lv_obj_set_style_text_color(lbl_vol, COLOR_TEXT_LIGHT, 0);
   lv_obj_set_pos(lbl_vol, 10, row_y + 6);
 
-  lv_obj_t *slider_vol = lv_slider_create(scr_settings);
-  lv_obj_set_size(slider_vol, 250, 16);
-  lv_obj_set_pos(slider_vol, 200, row_y + 8);
-  lv_slider_set_range(slider_vol, 0, 100);
-  lv_slider_set_value(slider_vol, g_settings.volume, LV_ANIM_OFF);
-  lv_obj_set_style_bg_color(slider_vol, COLOR_ACCENT, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(slider_vol, COLOR_BLUE, LV_PART_INDICATOR);
-  lv_obj_set_style_bg_color(slider_vol, COLOR_TEXT_LIGHT, LV_PART_KNOB);
-  lv_obj_add_event_cb(slider_vol, slider_volume_cb, LV_EVENT_VALUE_CHANGED,
+  slider_volume = lv_slider_create(scr_settings);
+  lv_obj_set_size(slider_volume, 250, 16);
+  lv_obj_set_pos(slider_volume, 200, row_y + 8);
+  lv_slider_set_range(slider_volume, 0, 100);
+  lv_slider_set_value(slider_volume, g_settings.volume, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(slider_volume, COLOR_ACCENT, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(slider_volume, COLOR_BLUE, LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(slider_volume, COLOR_TEXT_LIGHT, LV_PART_KNOB);
+  lv_obj_add_event_cb(slider_volume, slider_volume_cb, LV_EVENT_VALUE_CHANGED,
                       NULL);
   row_y += row_h;
 
@@ -601,13 +625,13 @@ static void create_settings_screen(void) {
   lv_obj_set_style_text_color(lbl_snd, COLOR_TEXT_LIGHT, 0);
   lv_obj_set_pos(lbl_snd, 10, row_y + 6);
 
-  lv_obj_t *sw_sound = lv_switch_create(scr_settings);
-  lv_obj_set_pos(sw_sound, 410, row_y + 2);
+  sw_sound_global = lv_switch_create(scr_settings);
+  lv_obj_set_pos(sw_sound_global, 410, row_y + 2);
   if (g_settings.sound_on)
-    lv_obj_add_state(sw_sound, LV_STATE_CHECKED);
-  lv_obj_set_style_bg_color(sw_sound, COLOR_GREEN,
+    lv_obj_add_state(sw_sound_global, LV_STATE_CHECKED);
+  lv_obj_set_style_bg_color(sw_sound_global, COLOR_GREEN,
                             LV_PART_INDICATOR | LV_STATE_CHECKED);
-  lv_obj_add_event_cb(sw_sound, sw_sound_cb, LV_EVENT_VALUE_CHANGED, NULL);
+  lv_obj_add_event_cb(sw_sound_global, sw_sound_cb, LV_EVENT_VALUE_CHANGED, NULL);
   row_y += row_h;
 
   // ── Theme Toggle ─────────────────────────────────
@@ -616,13 +640,13 @@ static void create_settings_screen(void) {
   lv_obj_set_style_text_color(lbl_thm, COLOR_TEXT_LIGHT, 0);
   lv_obj_set_pos(lbl_thm, 10, row_y + 6);
 
-  lv_obj_t *sw_theme = lv_switch_create(scr_settings);
-  lv_obj_set_pos(sw_theme, 410, row_y + 2);
+  sw_theme_global = lv_switch_create(scr_settings);
+  lv_obj_set_pos(sw_theme_global, 410, row_y + 2);
   if (g_settings.theme == 1)
-    lv_obj_add_state(sw_theme, LV_STATE_CHECKED);
-  lv_obj_set_style_bg_color(sw_theme, COLOR_YELLOW,
+    lv_obj_add_state(sw_theme_global, LV_STATE_CHECKED);
+  lv_obj_set_style_bg_color(sw_theme_global, COLOR_YELLOW,
                             LV_PART_INDICATOR | LV_STATE_CHECKED);
-  lv_obj_add_event_cb(sw_theme, sw_theme_cb, LV_EVENT_VALUE_CHANGED, NULL);
+  lv_obj_add_event_cb(sw_theme_global, sw_theme_cb, LV_EVENT_VALUE_CHANGED, NULL);
   row_y += row_h;
 
   // ── Version Info ─────────────────────────────────
@@ -648,7 +672,7 @@ void ui_init(void) {
 }
 
 // ============================================================================
-// Countdown Timer Callback (factory reset reboot sequence)
+// Countdown Timer Callback (reboot / factory-reset sequence)
 // ============================================================================
 
 static void countdown_timer_cb(lv_timer_t *t)
@@ -667,7 +691,7 @@ static void countdown_timer_cb(lv_timer_t *t)
             lv_timer_delete(tmr_countdown);
             tmr_countdown = NULL;
         }
-        ESP_LOGW(TAG, "Factory reset countdown complete — rebooting now");
+        ESP_LOGW(TAG, "Reboot countdown complete — rebooting now");
         vTaskDelay(pdMS_TO_TICKS(200)); // Let final frame flush to display
         esp_restart();
     }
@@ -811,14 +835,37 @@ void ui_task(void *pvParameters) {
               if (chart_voltage)  lv_obj_clear_flag(chart_voltage, LV_OBJ_FLAG_HIDDEN);
             }
           }
-          ESP_LOGI(TAG, "UI params refreshed from BLE (P1=%.1f T=%.1f P2=%.1f S=%.1f %s)",
+          // Sync settings screen widgets (brightness, volume, sound, theme)
+          if (slider_brightness) {
+            lv_slider_set_value(slider_brightness, g_settings.brightness, LV_ANIM_OFF);
+          }
+          display_set_brightness(g_settings.brightness);
+          if (slider_volume) {
+            lv_slider_set_value(slider_volume, g_settings.volume, LV_ANIM_OFF);
+          }
+          if (sw_sound_global) {
+            if (g_settings.sound_on) {
+              lv_obj_add_state(sw_sound_global, LV_STATE_CHECKED);
+            } else {
+              lv_obj_clear_state(sw_sound_global, LV_STATE_CHECKED);
+            }
+          }
+          if (sw_theme_global) {
+            if (g_settings.theme == 1) {
+              lv_obj_add_state(sw_theme_global, LV_STATE_CHECKED);
+            } else {
+              lv_obj_clear_state(sw_theme_global, LV_STATE_CHECKED);
+            }
+          }
+          ESP_LOGI(TAG, "UI params refreshed from BLE (P1=%.1f T=%.1f P2=%.1f S=%.1f %s br=%d vol=%d)",
                    g_settings.p1, g_settings.t, g_settings.p2, g_settings.s_value,
-                   g_settings.auto_mode ? "AUTO" : "MAN");
+                   g_settings.auto_mode ? "AUTO" : "MAN",
+                   g_settings.brightness, g_settings.volume);
           break;
         }
 
         case UI_MSG_REBOOT_COUNTDOWN: {
-          // ── Build full-screen countdown overlay ────────────────────────────
+          // ── Build full-screen countdown overlay ────────────────────────────────────────
           // Kill any previous countdown timer if re-triggered
           if (tmr_countdown) {
             lv_timer_delete(tmr_countdown);
@@ -831,22 +878,28 @@ void ui_task(void *pvParameters) {
           }
 
           s_countdown_val = 3;
+          bool factory = msg.is_factory_reset;
 
           // Full-screen dark overlay
           scr_countdown = lv_obj_create(NULL);
           lv_obj_set_style_bg_color(scr_countdown, lv_color_hex(0x0D0D1A), 0);
           lv_obj_clear_flag(scr_countdown, LV_OBJ_FLAG_SCROLLABLE);
 
-          // "Factory Resetting" header label
+          // Header label — contextual title based on reset type
           lv_obj_t *lbl_title = lv_label_create(scr_countdown);
-          lv_label_set_text(lbl_title, LV_SYMBOL_WARNING " Factory Reset");
-          lv_obj_set_style_text_color(lbl_title, lv_color_hex(0xFF4444), 0);
+          if (factory) {
+            lv_label_set_text(lbl_title, LV_SYMBOL_WARNING " Factory Reset");
+            lv_obj_set_style_text_color(lbl_title, lv_color_hex(0xFF4444), 0);
+          } else {
+            lv_label_set_text(lbl_title, LV_SYMBOL_REFRESH " Rebooting");
+            lv_obj_set_style_text_color(lbl_title, COLOR_BLUE, 0);
+          }
           lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_24, 0);
           lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 0, 30);
 
-          // Sub-label "Rebooting in..."
+          // Sub-label "Restarting in..."
           lv_obj_t *lbl_sub = lv_label_create(scr_countdown);
-          lv_label_set_text(lbl_sub, "Rebooting in...");
+          lv_label_set_text(lbl_sub, "Restarting in...");
           lv_obj_set_style_text_color(lbl_sub, lv_color_hex(0xAAAAAA), 0);
           lv_obj_set_style_text_font(lbl_sub, &lv_font_montserrat_16, 0);
           lv_obj_align(lbl_sub, LV_ALIGN_CENTER, 0, -30);
@@ -854,7 +907,8 @@ void ui_task(void *pvParameters) {
           // Large countdown digit
           lbl_countdown = lv_label_create(scr_countdown);
           lv_label_set_text(lbl_countdown, "3");
-          lv_obj_set_style_text_color(lbl_countdown, lv_color_hex(0xFF4444), 0);
+          lv_obj_set_style_text_color(lbl_countdown,
+              factory ? lv_color_hex(0xFF4444) : COLOR_BLUE, 0);
           lv_obj_set_style_text_font(lbl_countdown, &lv_font_montserrat_48, 0);
           lv_obj_align(lbl_countdown, LV_ALIGN_CENTER, 0, 30);
 
@@ -867,14 +921,90 @@ void ui_task(void *pvParameters) {
           // LVGL timer fires every 1 second — callback decrements the digit
           tmr_countdown = lv_timer_create(countdown_timer_cb, 1000, NULL);
 
-          ESP_LOGI(TAG, "Factory reset countdown started (3s)");
+          ESP_LOGI(TAG, "%s countdown started (3s)",
+                   factory ? "Factory reset" : "Reboot");
           break;
         }
 
         default: break;
+
+        case UI_MSG_OTA_PROGRESS: {
+          uint8_t pct = msg.ota_progress;
+
+          // Create OTA overlay screen on first call
+          if (!scr_ota) {
+            scr_ota = lv_obj_create(NULL);
+            lv_obj_set_style_bg_color(scr_ota, lv_color_hex(0x0D0D1A), 0);
+            lv_obj_clear_flag(scr_ota, LV_OBJ_FLAG_SCROLLABLE);
+
+            // Title
+            lv_obj_t *lbl_title = lv_label_create(scr_ota);
+            lv_label_set_text(lbl_title, LV_SYMBOL_DOWNLOAD " Firmware Update");
+            lv_obj_set_style_text_color(lbl_title, COLOR_BLUE, 0);
+            lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_24, 0);
+            lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 0, 40);
+
+            // Progress bar
+            bar_ota = lv_bar_create(scr_ota);
+            lv_obj_set_size(bar_ota, 360, 30);
+            lv_obj_align(bar_ota, LV_ALIGN_CENTER, 0, -10);
+            lv_bar_set_range(bar_ota, 0, 100);
+            lv_bar_set_value(bar_ota, 0, LV_ANIM_OFF);
+            lv_obj_set_style_bg_color(bar_ota, lv_color_hex(0x333333), LV_PART_MAIN);
+            lv_obj_set_style_bg_color(bar_ota, COLOR_BLUE, LV_PART_INDICATOR);
+            lv_obj_set_style_radius(bar_ota, 8, LV_PART_MAIN);
+            lv_obj_set_style_radius(bar_ota, 8, LV_PART_INDICATOR);
+
+            // Percentage label
+            lbl_ota_pct = lv_label_create(scr_ota);
+            lv_label_set_text(lbl_ota_pct, "0%");
+            lv_obj_set_style_text_color(lbl_ota_pct, COLOR_TEXT_LIGHT, 0);
+            lv_obj_set_style_text_font(lbl_ota_pct, &lv_font_montserrat_48, 0);
+            lv_obj_align(lbl_ota_pct, LV_ALIGN_CENTER, 0, 50);
+
+            // Warning
+            lv_obj_t *lbl_warn = lv_label_create(scr_ota);
+            lv_label_set_text(lbl_warn, LV_SYMBOL_WARNING " DO NOT POWER OFF");
+            lv_obj_set_style_text_color(lbl_warn, COLOR_RED, 0);
+            lv_obj_set_style_text_font(lbl_warn, &lv_font_montserrat_16, 0);
+            lv_obj_align(lbl_warn, LV_ALIGN_BOTTOM_MID, 0, -30);
+
+            lv_scr_load(scr_ota);
+          }
+
+          // Update progress
+          if (bar_ota) lv_bar_set_value(bar_ota, pct, LV_ANIM_ON);
+          if (lbl_ota_pct) lv_label_set_text_fmt(lbl_ota_pct, "%d%%", pct);
+
+          // Change bar color to green when complete
+          if (pct >= 100 && bar_ota) {
+            lv_obj_set_style_bg_color(bar_ota, COLOR_GREEN, LV_PART_INDICATOR);
+          }
+          break;
+        }
+
+        case UI_MSG_OTA_HIDE: {
+          if (scr_ota) {
+            lv_scr_load(scr_main);
+            lv_obj_del(scr_ota);
+            scr_ota = NULL;
+            lbl_ota_pct = NULL;
+            bar_ota = NULL;
+          }
+          break;
+        }
       }
     }
     // ── End queue drain ─────────────────────────────────────────────────────
+
+    // ── BLE connected icon: show/hide based on live connection state ───────
+    if (lbl_ble_icon) {
+      if (ble_serial_is_connected()) {
+        lv_obj_clear_flag(lbl_ble_icon, LV_OBJ_FLAG_HIDDEN);
+      } else {
+        lv_obj_add_flag(lbl_ble_icon, LV_OBJ_FLAG_HIDDEN);
+      }
+    }
 
     // lv_timer_handler renders and flushes the display.
     // flush_ready is signalled by the DMA ISR (panel_trans_done_cb).
@@ -934,13 +1064,25 @@ void ui_refresh_params(void) {
   xQueueSend(s_ui_queue, &msg, pdMS_TO_TICKS(5));
 }
 
-void ui_trigger_reboot_countdown(void) {
+void ui_trigger_reboot_countdown(bool is_factory_reset) {
   if (!s_ui_queue) {
     // Queue not up yet — reboot immediately as last resort
     esp_restart();
     return;
   }
-  ui_msg_t msg = { .type = UI_MSG_REBOOT_COUNTDOWN };
+  ui_msg_t msg = { .type = UI_MSG_REBOOT_COUNTDOWN, .is_factory_reset = is_factory_reset };
+  xQueueSend(s_ui_queue, &msg, pdMS_TO_TICKS(50));
+}
+
+void ui_show_ota_progress(uint8_t percent) {
+  if (!s_ui_queue) return;
+  ui_msg_t msg = { .type = UI_MSG_OTA_PROGRESS, .ota_progress = percent };
+  xQueueSend(s_ui_queue, &msg, pdMS_TO_TICKS(5));
+}
+
+void ui_hide_ota_progress(void) {
+  if (!s_ui_queue) return;
+  ui_msg_t msg = { .type = UI_MSG_OTA_HIDE };
   xQueueSend(s_ui_queue, &msg, pdMS_TO_TICKS(50));
 }
 
