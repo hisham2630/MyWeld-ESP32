@@ -98,6 +98,7 @@
 #define BLE_ERR_UNKNOWN_CMD         0x05    // Unknown command type
 #define BLE_ERR_AUTH_FAILED         0x06    // Wrong PIN
 #define BLE_ERR_AUTH_REQUIRED       0x07    // Command rejected — not authenticated
+#define BLE_ERR_AUTH_LOCKED         0x08    // Too many failed attempts — locked out
 
 // ============================================================================
 // Packet Structures (all packed, little-endian)
@@ -126,7 +127,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  fw_major;          // Firmware major version
     uint8_t  fw_minor;          // Firmware minor version
     uint8_t  volume;            // Master volume 0–100%
-    uint8_t  reserved;          // Future use, padding to 32 bytes
+    uint8_t  auth_lockout_sec;  // Remaining lockout seconds (0 = no lockout)
 } ble_status_packet_t;          // Total: 32 bytes
 
 _Static_assert(sizeof(ble_status_packet_t) == 32, "STATUS packet must be 32 bytes");

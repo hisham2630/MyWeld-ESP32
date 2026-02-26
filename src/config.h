@@ -169,6 +169,8 @@ typedef struct {
 // ============================================================================
 #define PIN_DEFAULT          "1234"   // Factory default PIN (4 ASCII digits)
 #define PIN_MAX_LEN          5        // 4 digits + null terminator
+#define BLE_AUTH_MAX_ATTEMPTS 5       // Wrong PINs before lockout
+#define BLE_AUTH_LOCKOUT_SEC  60      // Lockout duration (seconds)
 
 // ============================================================================
 // FreeRTOS Task Configuration

@@ -46,6 +46,23 @@ static uint16_t s_conn_handle = 0;
 static uint16_t s_status_attr_handle = 0;
 static uint16_t s_ota_attr_handle = 0;   // OTA characteristic notify handle
 
+// ── PIN lockout state ───────────────────────────────────────────────────────
+static uint8_t  s_failed_attempts  = 0;   // Consecutive wrong PIN count
+static TickType_t s_lockout_start  = 0;   // Tick when lockout began (0 = inactive)
+
+static uint8_t lockout_remaining_sec(void)
+{
+    if (s_lockout_start == 0) return 0;
+    TickType_t elapsed = xTaskGetTickCount() - s_lockout_start;
+    uint32_t elapsed_sec = elapsed / configTICK_RATE_HZ;
+    if (elapsed_sec >= BLE_AUTH_LOCKOUT_SEC) {
+        s_lockout_start = 0;   // Lockout expired
+        s_failed_attempts = 0;
+        return 0;
+    }
+    return (uint8_t)(BLE_AUTH_LOCKOUT_SEC - elapsed_sec);
+}
+
 // ── OTA chunk queue: decouple flash writes from BLE callback ────────────────
 // The BLE callback copies incoming chunk data here and returns immediately.
 // A background FreeRTOS task drains the queue and calls ota_write_chunk.
@@ -235,9 +252,10 @@ static void build_status_payload(ble_status_packet_t *pkt)
     pkt->t_x10          = (uint16_t)(g_settings.t * 10.0f);
     pkt->p2_x10         = (uint16_t)(g_settings.p2 * 10.0f);
     pkt->s_x10          = (uint16_t)(g_settings.s_value * 10.0f);
-    pkt->fw_major       = FW_VERSION_MAJOR;
-    pkt->fw_minor       = FW_VERSION_MINOR;
-    pkt->volume         = g_settings.volume;
+    pkt->fw_major         = FW_VERSION_MAJOR;
+    pkt->fw_minor         = FW_VERSION_MINOR;
+    pkt->volume           = g_settings.volume;
+    pkt->auth_lockout_sec = lockout_remaining_sec();
 }
 
 // ============================================================================
@@ -497,6 +515,15 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             send_nak(BLE_MSG_CMD, BLE_ERR_INVALID_RANGE);
             return 0;
         }
+
+        // Check lockout first
+        uint8_t remaining = lockout_remaining_sec();
+        if (remaining > 0) {
+            ESP_LOGW(TAG, "Auth rejected — locked out for %d more seconds", remaining);
+            send_nak(BLE_MSG_CMD, BLE_ERR_AUTH_LOCKED);
+            return 0;
+        }
+
         char pin[PIN_MAX_LEN];
         memset(pin, 0, sizeof(pin));
         memcpy(pin, &payload[1], PIN_MAX_LEN - 1);
@@ -504,12 +531,22 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 
         if (settings_verify_pin(pin)) {
             s_authenticated = true;
+            s_failed_attempts = 0;
             ESP_LOGI(TAG, "BLE authenticated successfully");
             send_ack(BLE_MSG_CMD);
         } else {
             s_authenticated = false;
-            ESP_LOGW(TAG, "BLE auth failed — wrong PIN");
-            send_nak(BLE_MSG_CMD, BLE_ERR_AUTH_FAILED);
+            s_failed_attempts++;
+            ESP_LOGW(TAG, "BLE auth failed — wrong PIN (attempt %d/%d)",
+                     s_failed_attempts, BLE_AUTH_MAX_ATTEMPTS);
+            if (s_failed_attempts >= BLE_AUTH_MAX_ATTEMPTS) {
+                s_lockout_start = xTaskGetTickCount();
+                ESP_LOGW(TAG, "Too many failed attempts — locking out for %d seconds",
+                         BLE_AUTH_LOCKOUT_SEC);
+                send_nak(BLE_MSG_CMD, BLE_ERR_AUTH_LOCKED);
+            } else {
+                send_nak(BLE_MSG_CMD, BLE_ERR_AUTH_FAILED);
+            }
         }
         return 0;
     }
@@ -862,6 +899,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         case BLE_GAP_EVENT_DISCONNECT:
             s_connected = false;
             s_authenticated = false;  // Force re-auth on next connection
+            s_failed_attempts = 0;    // Reset lockout counter on disconnect
+            s_lockout_start = 0;
             // Abort OTA if in progress (disconnect = restart from scratch)
             if (ota_is_active()) {
                 ESP_LOGW(TAG, "BLE disconnect during OTA — aborting");
