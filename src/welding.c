@@ -217,11 +217,11 @@ void welding_task(void *pvParameters)
         // Guard: only start the fault timer if the reading is in a plausible
         // "hardware connected" range (> PROTECT_RAIL_PLAUSIBLE_V).
         //
-        // A floating GPIO6 with a 47k+15k divider (no gate-drive connected)
+        // A floating GPIO6 with a 100k+15k divider (no gate-drive connected)
         // reads 0.5–4V of resistive/capacitive noise. A real 13.5V rail through
-        // the same divider reads ~3.3V×(62/15) = ~13.6V at the source → ~3.3V
-        // at the ADC pin → ~13.6V after multiplier. So any reading below
-        // PROTECT_RAIL_PLAUSIBLE_V is treated as "not connected / bench mode".
+        // the divider reads ~1.76V at the ADC pin → ~13.5V after the ×(115/15)
+        // multiplier. So any reading below PROTECT_RAIL_PLAUSIBLE_V is treated
+        // as "not connected / bench mode".
         float prot_v = g_weld_status.protection_voltage;
         if (prot_v > PROTECT_RAIL_PLAUSIBLE_V &&
             (prot_v < PROTECT_RAIL_MIN_V || prot_v > PROTECT_RAIL_MAX_V)) {

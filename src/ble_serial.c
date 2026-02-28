@@ -685,7 +685,7 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             uint16_t ref_mv = (uint16_t)(payload[2] | (payload[3] << 8));
             float reference = (float)ref_mv / 1000.0f;
 
-            if (channel > 1 || reference < 0.1f || reference > 20.0f) {
+            if (channel > 1 || reference < 0.1f || reference > 30.0f) {
                 ESP_LOGW(TAG, "Calibrate ADC: invalid channel=%d ref=%.2fV", channel, reference);
                 send_nak(BLE_MSG_CMD, BLE_ERR_INVALID_RANGE);
                 return 0;

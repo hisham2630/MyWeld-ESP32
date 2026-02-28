@@ -31,7 +31,7 @@
 
 // --- ADC Inputs (all ADC1 channels for reliability) ---
 #define PIN_VOLTAGE     GPIO_NUM_5   // Supercap voltage — ADC1_CH4 (P2 pin 1)
-#define PIN_PROTECTION  GPIO_NUM_6   // 13.5V gate drive rail — ADC1_CH5 (P2 pin 2)
+#define PIN_PROTECTION  GPIO_NUM_6   // Gate drive rail — ADC1_CH5 (P2 pin 2), safe up to ~25V
 #define PIN_CONTACT     GPIO_NUM_7   // Electrode contact detect — ADC1_CH6 (P2 pin 3)
 
 // --- Display (QSPI — internal, no user wiring) ---
@@ -75,7 +75,7 @@
 
 // Voltage divider multipliers (calculate real voltage from ADC reading)
 #define SUPERCAP_V_MULT      (25.0f / 15.0f)   // 10k+15k divider: Vreal = Vadc × (R1+R2)/R2
-#define PROTECTION_V_MULT    (62.0f / 15.0f)    // 47k+15k divider
+#define PROTECTION_V_MULT    (115.0f / 15.0f)   // 100k+15k divider (safe up to ~25V)
 
 // ============================================================================
 // Supercap Bank (2S2P, 3.0V 3000F per cell)
