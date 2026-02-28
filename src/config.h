@@ -120,6 +120,7 @@
 #define LOW_V_CONFIRM_MS     1500     // Confirm low voltage before blocking
 #define PROTECT_CONFIRM_MS   1500     // Confirm protection fault before blocking
 #define CHARGER_SETTLE_US    500      // Settle time before/after pulse (microseconds)
+#define POST_PULSE_CHARGE_DELAY_MS 5000 // Charge hold-off after pulse ends (ms)
 #define NVS_SAVE_DEBOUNCE_MS 2000     // Debounce NVS writes (prevent flash wear)
 #define ADC_SAMPLE_INTERVAL  500      // ADC sampling interval (ms) for voltage graph
 

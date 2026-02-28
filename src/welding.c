@@ -62,6 +62,9 @@ static bool s_auto_fired = false;
 // Set TRUE after weld fires, cleared only when button is RELEASED
 static bool s_man_fired = false;
 
+// Post-pulse cooldown: charger stays disabled for POST_PULSE_CHARGE_DELAY_MS
+static int64_t s_cooldown_start_us = 0;
+
 // Was caps charged on last check?
 static bool s_was_ready = false;
 
@@ -171,19 +174,19 @@ void welding_fire_pulse(void)
         portENABLE_INTERRUPTS();
     }
 
-    // 4. Cooldown — re-enable charger
+    // 4. Enter cooldown — charger stays DISABLED
+    //    The welding_task loop will re-enable it after POST_PULSE_CHARGE_DELAY_MS
     g_weld_state = WELD_STATE_COOLDOWN;
-    ets_delay_us(CHARGER_SETTLE_US);
-    gpio_set_level(PIN_CHARGER_EN, 0);
+    s_cooldown_start_us = esp_timer_get_time();
 
     // 5. Post-pulse: update counters and feedback (safe to call UI now)
-    g_weld_state = WELD_STATE_IDLE;
     settings_increment_weld_count();
     audio_play_weld_fire();
-    ui_update_weld_state(WELD_STATE_IDLE);
+    ui_update_weld_state(WELD_STATE_COOLDOWN);
     ui_update_weld_count(g_settings.session_welds, g_settings.total_welds);
 
-    ESP_LOGI(TAG, "⚡ Pulse complete. Welds: %lu (session) / %lu (total)",
+    ESP_LOGI(TAG, "⚡ Pulse complete, charge hold-off %dms. Welds: %lu / %lu",
+             POST_PULSE_CHARGE_DELAY_MS,
              (unsigned long)g_settings.session_welds,
              (unsigned long)g_settings.total_welds);
 }
@@ -281,6 +284,22 @@ void welding_task(void *pvParameters)
             ESP_LOGI(TAG, "Supercaps fully charged: %.1fV", cap_v);
         } else if (cap_v < SUPERCAP_FULL_V - 0.5f) {
             s_was_ready = false; // Hysteresis
+        }
+
+        // ==============================================
+        // Post-Pulse Cooldown (charger hold-off)
+        // ==============================================
+        if (g_weld_state == WELD_STATE_COOLDOWN) {
+            int64_t elapsed_us = esp_timer_get_time() - s_cooldown_start_us;
+            if (elapsed_us >= (int64_t)POST_PULSE_CHARGE_DELAY_MS * 1000LL) {
+                gpio_set_level(PIN_CHARGER_EN, 0); // Re-enable charger
+                g_weld_state = WELD_STATE_IDLE;
+                s_cooldown_start_us = 0;
+                ui_update_weld_state(WELD_STATE_IDLE);
+                ESP_LOGI(TAG, "Cooldown complete, charger re-enabled");
+            }
+            vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(10));
+            continue;
         }
 
         // ==============================================
