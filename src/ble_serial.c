@@ -729,8 +729,6 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             }
 
             settings_save_now();
-            // Hide the calibration warning icon since we just calibrated
-            ui_hide_cal_warning();
             send_ack(BLE_MSG_CMD);
             break;
         }
