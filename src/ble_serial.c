@@ -672,6 +672,69 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             break;
         }
 
+        case BLE_CMD_CALIBRATE_ADC: {
+            // Payload: [0x05, channel(1), ref_mv_lo(1), ref_mv_hi(1)]
+            // channel: 0 = supercap, 1 = protection
+            // ref_mv:  user's multimeter reading in millivolts (uint16 LE)
+            if (payload_len < 4) {
+                send_nak(BLE_MSG_CMD, BLE_ERR_INVALID_RANGE);
+                return 0;
+            }
+
+            uint8_t channel = payload[1];
+            uint16_t ref_mv = (uint16_t)(payload[2] | (payload[3] << 8));
+            float reference = (float)ref_mv / 1000.0f;
+
+            if (channel > 1 || reference < 0.1f || reference > 20.0f) {
+                ESP_LOGW(TAG, "Calibrate ADC: invalid channel=%d ref=%.2fV", channel, reference);
+                send_nak(BLE_MSG_CMD, BLE_ERR_INVALID_RANGE);
+                return 0;
+            }
+
+            // Get current reading and reverse existing cal_factor to find uncalibrated value
+            float uncal;
+            if (channel == 0) {
+                float current_cal = g_settings.adc_cal_voltage;
+                if (current_cal < 0.01f) current_cal = 1.0f;
+                uncal = g_weld_status.supercap_voltage / current_cal;
+            } else {
+                float current_cal = g_settings.adc_cal_protection;
+                if (current_cal < 0.01f) current_cal = 1.0f;
+                uncal = g_weld_status.protection_voltage / current_cal;
+            }
+
+            if (uncal < 0.01f) {
+                ESP_LOGW(TAG, "Calibrate ADC: uncalibrated reading too low (%.3f), no signal?", uncal);
+                send_nak(BLE_MSG_CMD, BLE_ERR_INVALID_RANGE);
+                return 0;
+            }
+
+            float new_factor = reference / uncal;
+
+            // Sanity check: factor should be close to 1.0
+            if (new_factor < 0.5f || new_factor > 2.0f) {
+                ESP_LOGW(TAG, "Calibrate ADC: factor %.3f out of range (0.5–2.0)", new_factor);
+                send_nak(BLE_MSG_CMD, BLE_ERR_INVALID_RANGE);
+                return 0;
+            }
+
+            if (channel == 0) {
+                g_settings.adc_cal_voltage = new_factor;
+                ESP_LOGI(TAG, "ADC cal voltage: ref=%.2fV uncal=%.2fV factor=%.4f",
+                         reference, uncal, new_factor);
+            } else {
+                g_settings.adc_cal_protection = new_factor;
+                ESP_LOGI(TAG, "ADC cal protection: ref=%.2fV uncal=%.2fV factor=%.4f",
+                         reference, uncal, new_factor);
+            }
+
+            settings_save_now();
+            // Hide the calibration warning icon since we just calibrated
+            ui_hide_cal_warning();
+            send_ack(BLE_MSG_CMD);
+            break;
+        }
+
         case BLE_CMD_REBOOT: {
             ESP_LOGI(TAG, "Reboot requested via BLE");
             send_ack(BLE_MSG_CMD);

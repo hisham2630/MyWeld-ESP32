@@ -115,4 +115,12 @@ void ui_show_ota_progress(uint8_t percent);
  */
 void ui_hide_ota_progress(void);
 
+/**
+ * Show or hide the ⚠️ calibration warning icon on the main screen status bar.
+ * Shown when ADC has never been calibrated (cal factors still at default 1.0).
+ * Thread-safe: posts to UI queue.
+ */
+void ui_show_cal_warning(void);
+void ui_hide_cal_warning(void);
+
 #endif // UI_H

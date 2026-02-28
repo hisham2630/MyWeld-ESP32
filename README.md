@@ -23,12 +23,13 @@
 - [Project Structure](#project-structure)
 - [Configuration](#configuration)
 - [Safety Design](#safety-design)
+- [Acknowledgments](#acknowledgments)
 
 ---
 
 ## Overview
 
-**MyWeld** is a DIY supercapacitor spot welder controlled by an ESP32-S3 microcontroller. The firmware provides:
+**MyWeld** is a DIY supercapacitor spot welder controlled by an ESP32-S3 microcontroller, adapted from the [**MyWeld V2.0 PRO**](https://www.youtube.com/@akakasyan) by **Aka Kasyan**. The firmware provides:
 
 - A full-color touchscreen UI (LVGL 9.x, 480×320) for real-time control and monitoring
 - A dual-mode welding engine — **Manual** (button press) and **Auto** (contact detection)
@@ -332,6 +333,20 @@ All hardware and behaviour constants are in [`src/config.h`](src/config.h):
 
 The Android companion app for remote control is available at:  
 👉 **[github.com/hisham2630/MyWeld-Android](https://github.com/hisham2630/MyWeld-Android)**
+
+---
+
+## Acknowledgments
+
+This project is an ESP32-S3 adaptation of the **MyWeld V2.0 PRO** spot welder, originally designed and built by **[Aka Kasyan](https://www.youtube.com/@akakasyan)**.
+
+A huge thank you to Aka Kasyan for:
+- 🔩 The original **MyWeld V2.0 PRO** hardware design and PCB layout
+- 💻 The proven **welding logic** (dual-pulse P1/T/P2 sequence, protection systems)
+- 📺 The excellent **YouTube tutorials** that made this project possible
+- 🌍 Sharing his knowledge and inspiring the maker/DIY community
+
+The original project was built around an **Arduino Nano** with a 20×4 LCD, rotary encoder, and 12× IRL40SC228 MOSFETs. This adaptation ports the welding logic to an **ESP32-S3** (Guition JC3248W535) with a full-color TFT touchscreen, BLE companion app, I2S audio, and 16× IXTP170N075T2 MOSFETs — while preserving the core pulse generation and safety principles from Aka Kasyan's original design.
 
 ---
 

@@ -43,6 +43,8 @@ typedef enum {
     UI_MSG_REBOOT_COUNTDOWN,        // Show reboot countdown (factory-reset or normal)
     UI_MSG_OTA_PROGRESS,            // OTA firmware update progress (0–100)
     UI_MSG_OTA_HIDE,                // Hide OTA overlay
+    UI_MSG_CAL_SHOW,                // Show calibration warning icon
+    UI_MSG_CAL_HIDE,                // Hide calibration warning icon
 } ui_msg_type_t;
 
 typedef struct {
@@ -114,6 +116,7 @@ static lv_obj_t *chart_voltage = NULL;
 static lv_chart_series_t *chart_series = NULL;
 static lv_obj_t *volt_container = NULL;  // promoted to global for mode-toggle repositioning
 static lv_obj_t *lbl_ble_icon = NULL;    // BLE connected indicator (shown/hidden)
+static lv_obj_t *lbl_cal_warn = NULL;    // ADC calibration warning icon (shown when uncalibrated)
 
 // Settings screen widgets (stored globally so BLE refresh can update them)
 static lv_obj_t *slider_brightness = NULL;
@@ -340,6 +343,19 @@ static void create_main_screen(void) {
   lv_obj_set_style_text_font(lbl_ble_icon, &lv_font_montserrat_16, 0);
   lv_obj_align(lbl_ble_icon, LV_ALIGN_RIGHT_MID, -58, 0);
   lv_obj_add_flag(lbl_ble_icon, LV_OBJ_FLAG_HIDDEN);
+
+  // ADC calibration warning icon (shown when never calibrated)
+  lbl_cal_warn = lv_label_create(status_bar);
+  lv_label_set_text(lbl_cal_warn, LV_SYMBOL_WARNING);
+  lv_obj_set_style_text_color(lbl_cal_warn, COLOR_YELLOW, 0);
+  lv_obj_set_style_text_font(lbl_cal_warn, &lv_font_montserrat_16, 0);
+  lv_obj_align(lbl_cal_warn, LV_ALIGN_RIGHT_MID, -80, 0);
+  // Show only if ADC has never been calibrated (cal factors at default 1.0)
+  if (g_settings.adc_cal_voltage == 1.0f && g_settings.adc_cal_protection == 1.0f) {
+    lv_obj_clear_flag(lbl_cal_warn, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(lbl_cal_warn, LV_OBJ_FLAG_HIDDEN);
+  }
 
   // ── Parameter Cards ──────────────────────────────
   int card_y = 42;
@@ -983,6 +999,16 @@ void ui_task(void *pvParameters) {
           break;
         }
 
+        case UI_MSG_CAL_SHOW: {
+          if (lbl_cal_warn) lv_obj_clear_flag(lbl_cal_warn, LV_OBJ_FLAG_HIDDEN);
+          break;
+        }
+
+        case UI_MSG_CAL_HIDE: {
+          if (lbl_cal_warn) lv_obj_add_flag(lbl_cal_warn, LV_OBJ_FLAG_HIDDEN);
+          break;
+        }
+
         case UI_MSG_OTA_HIDE: {
           if (scr_ota) {
             lv_scr_load(scr_main);
@@ -1083,6 +1109,18 @@ void ui_show_ota_progress(uint8_t percent) {
 void ui_hide_ota_progress(void) {
   if (!s_ui_queue) return;
   ui_msg_t msg = { .type = UI_MSG_OTA_HIDE };
+  xQueueSend(s_ui_queue, &msg, pdMS_TO_TICKS(50));
+}
+
+void ui_show_cal_warning(void) {
+  if (!s_ui_queue) return;
+  ui_msg_t msg = { .type = UI_MSG_CAL_SHOW };
+  xQueueSend(s_ui_queue, &msg, pdMS_TO_TICKS(50));
+}
+
+void ui_hide_cal_warning(void) {
+  if (!s_ui_queue) return;
+  ui_msg_t msg = { .type = UI_MSG_CAL_HIDE };
   xQueueSend(s_ui_queue, &msg, pdMS_TO_TICKS(50));
 }
 

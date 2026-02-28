@@ -5,6 +5,11 @@
  * MyWeld ESP32-S3 — Hardware Configuration
  * Board: JC3248W535 (Guition ESP32-S3, AXS15231B display)
  * 
+ * Original MyWeld V2.0 PRO designed by Aka Kasyan (YouTube)
+ * https://www.youtube.com/@akakasyan
+ * This project is an ESP32-S3 adaptation of his original Arduino Nano design.
+ * Thank you Aka Kasyan for the inspiration and the excellent welding logic!
+ * 
  * All pin assignments VERIFIED from:
  *   - Official JC3248W535 GPIO割当表 (2025/02/01)
  *   - Board schematic (JC3248W535 V1.0, 深圳市晶彩智能有限公司)
