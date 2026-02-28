@@ -105,7 +105,7 @@
 // ============================================================================
 
 /**
- * STATUS payload (BLE_MSG_STATUS) — 32 bytes, sent every ~500ms via notify.
+ * STATUS payload (BLE_MSG_STATUS) — 40 bytes, sent every ~500ms via notify.
  */
 typedef struct __attribute__((packed)) {
     uint16_t supercap_mv;       // Supercap voltage in millivolts (0–5700)
@@ -128,9 +128,14 @@ typedef struct __attribute__((packed)) {
     uint8_t  fw_minor;          // Firmware minor version
     uint8_t  volume;            // Master volume 0–100%
     uint8_t  auth_lockout_sec;  // Remaining lockout seconds (0 = no lockout)
-} ble_status_packet_t;          // Total: 32 bytes
+    // Debug / calibration data (bytes 32–39)
+    uint16_t raw_supercap_mv;   // Uncalibrated supercap voltage (mV)
+    uint16_t raw_protection_mv; // Uncalibrated protection voltage (mV)
+    uint16_t cal_factor_v_x1000; // Supercap cal factor × 1000 (1000 = 1.0)
+    uint16_t cal_factor_p_x1000; // Protection cal factor × 1000 (1000 = 1.0)
+} ble_status_packet_t;          // Total: 40 bytes
 
-_Static_assert(sizeof(ble_status_packet_t) == 32, "STATUS packet must be 32 bytes");
+_Static_assert(sizeof(ble_status_packet_t) == 40, "STATUS packet must be 40 bytes");
 
 /**
  * PARAMS_WRITE payload (BLE_MSG_PARAMS_WRITE) — 29 bytes.

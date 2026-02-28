@@ -47,6 +47,18 @@ extern app_settings_t g_settings;
 void settings_init(void);
 
 /**
+ * Initialize calibration from dedicated NVS partition.
+ * Migrates from legacy settings if needed. Call AFTER settings_init().
+ */
+void calibration_init(void);
+
+/**
+ * Save current calibration factors to dedicated NVS partition.
+ * Call after ADC calibration is performed.
+ */
+void calibration_save(void);
+
+/**
  * Save current settings to NVS (debounced).
  * Call this after any parameter change.
  */

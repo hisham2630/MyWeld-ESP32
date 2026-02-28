@@ -256,6 +256,16 @@ static void build_status_payload(ble_status_packet_t *pkt)
     pkt->fw_minor         = FW_VERSION_MINOR;
     pkt->volume           = g_settings.volume;
     pkt->auth_lockout_sec = lockout_remaining_sec();
+
+    // Debug / calibration: raw ADC values (reverse the cal_factor to get uncalibrated)
+    float cal_v = g_settings.adc_cal_voltage;
+    float cal_p = g_settings.adc_cal_protection;
+    if (cal_v < 0.01f) cal_v = 1.0f;
+    if (cal_p < 0.01f) cal_p = 1.0f;
+    pkt->raw_supercap_mv    = (uint16_t)(g_weld_status.supercap_voltage / cal_v * 1000.0f);
+    pkt->raw_protection_mv  = (uint16_t)(g_weld_status.protection_voltage / cal_p * 1000.0f);
+    pkt->cal_factor_v_x1000 = (uint16_t)(cal_v * 1000.0f);
+    pkt->cal_factor_p_x1000 = (uint16_t)(cal_p * 1000.0f);
 }
 
 // ============================================================================
@@ -728,7 +738,7 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                          reference, uncal, new_factor);
             }
 
-            settings_save_now();
+            calibration_save();
             send_ack(BLE_MSG_CMD);
             break;
         }

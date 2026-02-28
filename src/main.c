@@ -125,6 +125,9 @@ void app_main(void) {
   // Load saved settings from NVS
   settings_init();
 
+  // Load ADC calibration from dedicated partition (survives factory reset)
+  calibration_init();
+
   // OTA rollback check — mark firmware valid if we booted successfully
   ota_init();
 

@@ -14,6 +14,8 @@
 
 static const char *TAG = "Settings";
 static const char *NVS_NAMESPACE = "myweld";
+static const char *CAL_PARTITION  = "calib";
+static const char *CAL_NAMESPACE  = "cal";
 
 app_settings_t g_settings;
 
@@ -113,8 +115,8 @@ static void settings_load_from_nvs(void)
     uint32_t u32val;
     if (nvs_get_u32(s_nvs_handle, "totalWeld", &u32val) == ESP_OK) g_settings.total_welds = u32val;
 
-    g_settings.adc_cal_voltage = nvs_get_float("adcCalV", 1.0f);
-    g_settings.adc_cal_protection = nvs_get_float("adcCalP", 1.0f);
+    // NOTE: ADC calibration is loaded from dedicated 'calib' partition
+    //       via calibration_init() — not stored here anymore.
 
     size_t name_len = sizeof(g_settings.ble_name);
     if (nvs_get_str(s_nvs_handle, "bleName", g_settings.ble_name, &name_len) != ESP_OK) {
@@ -168,8 +170,8 @@ static void settings_write_to_nvs(void)
     nvs_set_u8(s_nvs_handle, "theme", g_settings.theme);
     nvs_set_u8(s_nvs_handle, "actPreset", g_settings.active_preset);
     nvs_set_u32(s_nvs_handle, "totalWeld", g_settings.total_welds);
-    nvs_set_float("adcCalV", g_settings.adc_cal_voltage);
-    nvs_set_float("adcCalP", g_settings.adc_cal_protection);
+    // NOTE: ADC calibration is saved to dedicated 'calib' partition
+    //       via calibration_save() — not stored here anymore.
     nvs_set_str(s_nvs_handle, "bleName", g_settings.ble_name);
     nvs_set_str(s_nvs_handle, "pin", g_settings.pin);
 
@@ -220,6 +222,83 @@ void settings_init(void)
     ESP_LOGI(TAG, "Settings initialized");
 }
 
+// ============================================================================
+// Calibration — Dedicated NVS Partition (survives factory reset)
+// ============================================================================
+
+void calibration_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open_from_partition(CAL_PARTITION, CAL_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open calibration partition for writing");
+        return;
+    }
+    nvs_set_i32(h, "calV", (int32_t)(g_settings.adc_cal_voltage * 1000.0f));
+    nvs_set_i32(h, "calP", (int32_t)(g_settings.adc_cal_protection * 1000.0f));
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "Calibration saved: voltage=%.4f protection=%.4f",
+             g_settings.adc_cal_voltage, g_settings.adc_cal_protection);
+}
+
+void calibration_init(void)
+{
+    // Initialize the dedicated calibration NVS partition
+    esp_err_t ret = nvs_flash_init_partition(CAL_PARTITION);
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase_partition(CAL_PARTITION);
+        ret = nvs_flash_init_partition(CAL_PARTITION);
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init calibration partition: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    // Try to load from dedicated partition
+    nvs_handle_t h;
+    bool found = false;
+    if (nvs_open_from_partition(CAL_PARTITION, CAL_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        int32_t raw;
+        if (nvs_get_i32(h, "calV", &raw) == ESP_OK) {
+            g_settings.adc_cal_voltage = (float)raw / 1000.0f;
+            found = true;
+        }
+        if (nvs_get_i32(h, "calP", &raw) == ESP_OK) {
+            g_settings.adc_cal_protection = (float)raw / 1000.0f;
+            found = true;
+        }
+        nvs_close(h);
+    }
+
+    // Migration: if not in calib partition, check legacy myweld namespace
+    if (!found) {
+        nvs_handle_t legacy;
+        if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &legacy) == ESP_OK) {
+            int32_t raw;
+            bool migrated = false;
+            if (nvs_get_i32(legacy, "adcCalV", &raw) == ESP_OK) {
+                g_settings.adc_cal_voltage = (float)raw / 1000.0f;
+                nvs_erase_key(legacy, "adcCalV");
+                migrated = true;
+            }
+            if (nvs_get_i32(legacy, "adcCalP", &raw) == ESP_OK) {
+                g_settings.adc_cal_protection = (float)raw / 1000.0f;
+                nvs_erase_key(legacy, "adcCalP");
+                migrated = true;
+            }
+            if (migrated) {
+                nvs_commit(legacy);
+                calibration_save();
+                ESP_LOGI(TAG, "Calibration migrated from legacy NVS to dedicated partition");
+            }
+            nvs_close(legacy);
+        }
+    }
+
+    ESP_LOGI(TAG, "Calibration loaded: voltage=%.4f protection=%.4f",
+             g_settings.adc_cal_voltage, g_settings.adc_cal_protection);
+}
+
 void settings_save(void)
 {
     s_dirty = true;
@@ -236,7 +315,7 @@ void settings_save_now(void)
 
 void settings_factory_reset(void)
 {
-    // Erase NVS namespace
+    // Erase main settings NVS — calibration lives in separate partition
     nvs_handle_t h;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
         nvs_erase_all(h);
@@ -244,8 +323,22 @@ void settings_factory_reset(void)
         nvs_close(h);
     }
     settings_load_defaults();
+
+    // Reload calibration from dedicated partition (unaffected by factory reset)
+    nvs_handle_t cal_h;
+    if (nvs_open_from_partition(CAL_PARTITION, CAL_NAMESPACE, NVS_READONLY, &cal_h) == ESP_OK) {
+        int32_t raw;
+        if (nvs_get_i32(cal_h, "calV", &raw) == ESP_OK) {
+            g_settings.adc_cal_voltage = (float)raw / 1000.0f;
+        }
+        if (nvs_get_i32(cal_h, "calP", &raw) == ESP_OK) {
+            g_settings.adc_cal_protection = (float)raw / 1000.0f;
+        }
+        nvs_close(cal_h);
+    }
+
     settings_write_to_nvs();
-    ESP_LOGW(TAG, "Factory reset complete — all settings restored to defaults");
+    ESP_LOGW(TAG, "Factory reset complete — calibration preserved (separate partition)");
 }
 
 void settings_load_preset(uint8_t index)
