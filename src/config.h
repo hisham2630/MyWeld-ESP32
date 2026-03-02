@@ -72,6 +72,8 @@
 #define ADC_RESOLUTION_BITS  12        // ESP32-S3: 12-bit (0–4095)
 #define ADC_MAX_VALUE        4095
 #define ADC_VREF             3.3f
+#define ADC_NUM_SAMPLES      16         // Multi-sample averaging (noise reduction √16 = 4×)
+#define ADC_EMA_ALPHA        0.2f       // EMA smoothing factor (lower = smoother, slower)
 
 // Voltage divider multipliers (calculate real voltage from ADC reading)
 #define SUPERCAP_V_MULT      (25.0f / 15.0f)   // 10k+15k divider: Vreal = Vadc × (R1+R2)/R2
@@ -120,7 +122,7 @@
 #define LOW_V_CONFIRM_MS     1500     // Confirm low voltage before blocking
 #define PROTECT_CONFIRM_MS   1500     // Confirm protection fault before blocking
 #define CHARGER_SETTLE_US    500      // Settle time before/after pulse (microseconds)
-#define POST_PULSE_CHARGE_DELAY_MS 5000 // Charge hold-off after pulse ends (ms)
+#define POST_PULSE_CHARGE_DELAY_MS 500 // Charge hold-off after pulse ends (ms)
 #define NVS_SAVE_DEBOUNCE_MS 2000     // Debounce NVS writes (prevent flash wear)
 #define ADC_SAMPLE_INTERVAL  500      // ADC sampling interval (ms) for voltage graph
 

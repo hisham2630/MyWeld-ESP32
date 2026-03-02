@@ -62,8 +62,10 @@ static bool s_auto_fired = false;
 // Set TRUE after weld fires, cleared only when button is RELEASED
 static bool s_man_fired = false;
 
-// Post-pulse cooldown: charger stays disabled for POST_PULSE_CHARGE_DELAY_MS
+// Post-pulse charger hold-off: charger stays disabled for POST_PULSE_CHARGE_DELAY_MS
+// This is INDEPENDENT of the weld state — welding is allowed during hold-off
 static int64_t s_cooldown_start_us = 0;
+static bool s_charger_holdoff = false;
 
 // Was caps charged on last check?
 static bool s_was_ready = false;
@@ -108,20 +110,32 @@ static void adc_hw_init(void)
 }
 
 /**
- * Read ADC channel and convert to voltage (mV), applying calibration if available.
+ * Read ADC channel with multi-sample averaging, then convert to voltage.
+ * Takes ADC_NUM_SAMPLES readings and averages for noise reduction.
  */
 static float adc_read_voltage(adc_channel_t channel, float multiplier, float cal_factor)
 {
-    int raw = 0;
-    if (adc_oneshot_read(s_adc_handle, channel, &raw) != ESP_OK) return 0.0f;
+    int32_t sum = 0;
+    int valid = 0;
+
+    for (int i = 0; i < ADC_NUM_SAMPLES; i++) {
+        int raw = 0;
+        if (adc_oneshot_read(s_adc_handle, channel, &raw) == ESP_OK) {
+            sum += raw;
+            valid++;
+        }
+    }
+
+    if (valid == 0) return 0.0f;
+    int avg_raw = (int)(sum / valid);
 
     float voltage;
     if (s_adc_cali) {
         int mv = 0;
-        adc_cali_raw_to_voltage(s_adc_cali, raw, &mv);
+        adc_cali_raw_to_voltage(s_adc_cali, avg_raw, &mv);
         voltage = (float)mv / 1000.0f;
     } else {
-        voltage = (float)raw * ADC_VREF / ADC_MAX_VALUE;
+        voltage = (float)avg_raw * ADC_VREF / ADC_MAX_VALUE;
     }
 
     return voltage * multiplier * cal_factor;
@@ -174,18 +188,20 @@ void welding_fire_pulse(void)
         portENABLE_INTERRUPTS();
     }
 
-    // 4. Enter cooldown — charger stays DISABLED
+    // 4. Start charger hold-off timer (charger stays DISABLED)
     //    The welding_task loop will re-enable it after POST_PULSE_CHARGE_DELAY_MS
-    g_weld_state = WELD_STATE_COOLDOWN;
+    //    This does NOT block new welds — the state goes to IDLE immediately
     s_cooldown_start_us = esp_timer_get_time();
+    s_charger_holdoff = true;
+    g_weld_state = WELD_STATE_IDLE;
 
-    // 5. Post-pulse: update counters and feedback (safe to call UI now)
+    // 5. Post-pulse: update counters and feedback
     settings_increment_weld_count();
     audio_play_weld_fire();
-    ui_update_weld_state(WELD_STATE_COOLDOWN);
+    ui_update_weld_state(WELD_STATE_IDLE);
     ui_update_weld_count(g_settings.session_welds, g_settings.total_welds);
 
-    ESP_LOGI(TAG, "⚡ Pulse complete, charge hold-off %dms. Welds: %lu / %lu",
+    ESP_LOGI(TAG, "⚡ Pulse complete, charger hold-off %dms. Welds: %lu / %lu",
              POST_PULSE_CHARGE_DELAY_MS,
              (unsigned long)g_settings.session_welds,
              (unsigned long)g_settings.total_welds);
@@ -287,19 +303,18 @@ void welding_task(void *pvParameters)
         }
 
         // ==============================================
-        // Post-Pulse Cooldown (charger hold-off)
+        // Charger Hold-off Timer (non-blocking)
+        // Charger stays disabled for POST_PULSE_CHARGE_DELAY_MS after pulse,
+        // but this does NOT prevent arming or welding.
         // ==============================================
-        if (g_weld_state == WELD_STATE_COOLDOWN) {
+        if (s_charger_holdoff) {
             int64_t elapsed_us = esp_timer_get_time() - s_cooldown_start_us;
             if (elapsed_us >= (int64_t)POST_PULSE_CHARGE_DELAY_MS * 1000LL) {
                 gpio_set_level(PIN_CHARGER_EN, 0); // Re-enable charger
-                g_weld_state = WELD_STATE_IDLE;
+                s_charger_holdoff = false;
                 s_cooldown_start_us = 0;
-                ui_update_weld_state(WELD_STATE_IDLE);
-                ESP_LOGI(TAG, "Cooldown complete, charger re-enabled");
+                ESP_LOGI(TAG, "Charger hold-off complete, charger re-enabled");
             }
-            vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(10));
-            continue;
         }
 
         // ==============================================
@@ -416,14 +431,32 @@ void adc_task(void *pvParameters)
 
     adc_hw_init();
 
+    // EMA filter state
+    float ema_cap = 0.0f;
+    float ema_prot = 0.0f;
+    bool ema_initialized = false;
+
     uint32_t graph_counter = 0;
     TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
-        // Read all ADC channels
-        float v_cap = adc_read_voltage(ADC_CHANNEL_4, SUPERCAP_V_MULT, g_settings.adc_cal_voltage);
-        float v_prot = adc_read_voltage(ADC_CHANNEL_5, PROTECTION_V_MULT, g_settings.adc_cal_protection);
-        float v_contact = adc_read_voltage(ADC_CHANNEL_6, 1.0f, 1.0f); // Raw 0–3.3V
+        // Read all ADC channels (multi-sampled internally)
+        float v_cap_raw = adc_read_voltage(ADC_CHANNEL_4, SUPERCAP_V_MULT, g_settings.adc_cal_voltage);
+        float v_prot_raw = adc_read_voltage(ADC_CHANNEL_5, PROTECTION_V_MULT, g_settings.adc_cal_protection);
+        float v_contact = adc_read_voltage(ADC_CHANNEL_6, 1.0f, 1.0f); // Raw 0–3.3V (no EMA — needs fast response)
+
+        // Apply EMA smoothing to voltage channels (not contact — it needs instant response)
+        if (!ema_initialized) {
+            ema_cap = v_cap_raw;
+            ema_prot = v_prot_raw;
+            ema_initialized = true;
+        } else {
+            ema_cap = ADC_EMA_ALPHA * v_cap_raw + (1.0f - ADC_EMA_ALPHA) * ema_cap;
+            ema_prot = ADC_EMA_ALPHA * v_prot_raw + (1.0f - ADC_EMA_ALPHA) * ema_prot;
+        }
+
+        float v_cap = ema_cap;
+        float v_prot = ema_prot;
 
         // Update global status (read by welding task)
         g_weld_status.supercap_voltage = v_cap;
