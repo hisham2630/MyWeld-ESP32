@@ -54,11 +54,13 @@
 #define PIN_I2S_BCLK    GPIO_NUM_42  // I2S Bit Clock
 #define PIN_I2S_DOUT    GPIO_NUM_41  // I2S Data Out
 
+// --- Rotary Encoder (KY-040 style, 5-pin module) ---
+#define PIN_ENC_S1      GPIO_NUM_15  // CLK (quadrature A) — P2 pin 4
+#define PIN_ENC_S2      GPIO_NUM_17  // DT  (quadrature B) — P3/P4
+#define PIN_ENC_KEY     GPIO_NUM_18  // SW  (push button, active LOW) — P3/P4
+
 // --- Spare GPIOs (available for future expansion) ---
-#define PIN_SPARE_1     GPIO_NUM_15  // P2 pin 4
-#define PIN_SPARE_2     GPIO_NUM_9   // P2 pin 7 (ADC1_CH8)
-#define PIN_SPARE_3     GPIO_NUM_17  // P3/P4
-#define PIN_SPARE_4     GPIO_NUM_18  // P3/P4
+#define PIN_SPARE_1     GPIO_NUM_9   // P2 pin 7 (ADC1_CH8) — reserved for temp sensor
 
 // ============================================================================
 // Display Configuration
@@ -125,6 +127,11 @@
 #define POST_PULSE_CHARGE_DELAY_MS 500 // Charge hold-off after pulse ends (ms)
 #define NVS_SAVE_DEBOUNCE_MS 2000     // Debounce NVS writes (prevent flash wear)
 #define ADC_SAMPLE_INTERVAL  500      // ADC sampling interval (ms) for voltage graph
+
+// Encoder tuning
+#define ENC_DEBOUNCE_MS          5      // Rotation edge debounce (microsecond compare)
+#define ENC_KEY_DEBOUNCE_MS      50     // Button debounce
+#define ENC_LONG_PRESS_MS        500    // Long press threshold
 
 // ============================================================================
 // I2S Audio Configuration

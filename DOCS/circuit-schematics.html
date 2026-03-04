@@ -1,0 +1,1218 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MyWeld ESP32-S3 — Circuit Schematics</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            line-height: 1.6
+        }
+
+        header {
+            background: linear-gradient(135deg, #0f0f23, #1a1a2e);
+            border-bottom: 2px solid #e94560;
+            padding: 24px 40px;
+            text-align: center
+        }
+
+        header h1 {
+            font-size: 28px;
+            color: #fff;
+            letter-spacing: 1px
+        }
+
+        header p {
+            color: #a0a0b0;
+            font-size: 14px;
+            margin-top: 4px
+        }
+
+        nav {
+            background: #0f0f23;
+            padding: 12px 40px;
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: center;
+            border-bottom: 1px solid #2a2a4a;
+            position: sticky;
+            top: 0;
+            z-index: 10
+        }
+
+        nav a {
+            color: #e94560;
+            text-decoration: none;
+            padding: 6px 14px;
+            border: 1px solid #2a2a4a;
+            border-radius: 6px;
+            font-size: 13px;
+            transition: all .2s
+        }
+
+        nav a:hover {
+            background: #e94560;
+            color: #fff;
+            border-color: #e94560
+        }
+
+        main {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 30px 20px
+        }
+
+        section {
+            margin-bottom: 40px;
+            background: #16213e;
+            border-radius: 12px;
+            padding: 28px;
+            border: 1px solid #2a2a4a
+        }
+
+        section h2 {
+            color: #e94560;
+            font-size: 22px;
+            margin-bottom: 6px;
+            border-bottom: 1px solid #2a2a4a;
+            padding-bottom: 8px
+        }
+
+        section h2 span {
+            font-size: 13px;
+            color: #888;
+            font-weight: normal;
+            margin-left: 8px
+        }
+
+        .diagram-wrap {
+            background: #fff;
+            border-radius: 8px;
+            margin-top: 16px;
+            padding: 16px;
+            overflow-x: auto
+        }
+
+        svg {
+            display: block;
+            margin: 0 auto
+        }
+
+        svg text {
+            font-family: 'Segoe UI', system-ui, sans-serif
+        }
+
+        .comp-label {
+            font-size: 11px;
+            fill: #333;
+            font-weight: 600
+        }
+
+        .comp-value {
+            font-size: 10px;
+            fill: #555
+        }
+
+        .pin-label {
+            font-size: 9px;
+            fill: #0066cc;
+            font-weight: 600
+        }
+
+        .title-text {
+            font-size: 14px;
+            fill: #111;
+            font-weight: 700
+        }
+
+        .note-text {
+            font-size: 9px;
+            fill: #777;
+            font-style: italic
+        }
+
+        .wire {
+            stroke: #111;
+            stroke-width: 2;
+            fill: none
+        }
+
+        .wire-thick {
+            stroke: #111;
+            stroke-width: 3;
+            fill: none
+        }
+
+        .comp-stroke {
+            stroke: #111;
+            stroke-width: 1.8;
+            fill: none
+        }
+
+        .comp-fill {
+            stroke: #111;
+            stroke-width: 1.8;
+            fill: #e8e8e8
+        }
+
+        .junction {
+            fill: #111
+        }
+
+        .danger-box {
+            fill: #fff0f0;
+            stroke: #cc0000;
+            stroke-width: 1.5;
+            rx: 4
+        }
+
+        .info-box {
+            fill: #f0f8ff;
+            stroke: #0066cc;
+            stroke-width: 1;
+            rx: 4
+        }
+
+        .warn-text {
+            font-size: 10px;
+            fill: #cc0000;
+            font-weight: 600
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 16px;
+            font-size: 13px
+        }
+
+        th {
+            background: #0f0f23;
+            color: #e94560;
+            padding: 10px 12px;
+            text-align: left;
+            border: 1px solid #2a2a4a
+        }
+
+        td {
+            padding: 8px 12px;
+            border: 1px solid #2a2a4a
+        }
+
+        tr:nth-child(even) {
+            background: #1a1a3e
+        }
+
+        .safety-note {
+            background: #2a1a1a;
+            border: 1px solid #e94560;
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 20px;
+            color: #ff8888;
+            font-size: 13px
+        }
+
+        .safety-note strong {
+            color: #e94560
+        }
+
+        @media print {
+            body {
+                background: #fff;
+                color: #000
+            }
+
+            header,
+            nav {
+                display: none
+            }
+
+            section {
+                border: 1px solid #ccc;
+                break-inside: avoid
+            }
+
+            main {
+                max-width: 100%
+            }
+
+            .diagram-wrap {
+                border: 1px solid #ccc
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>⚡ MyWeld ESP32-S3 — Circuit Schematics</h1>
+        <p>Board: JC3248W535 · ESP32-S3 N16R8 · DIY Supercap Spot Welder · Original design by Aka Kasyan</p>
+    </header>
+    <nav>
+        <a href="#power">1. Power Distribution</a>
+        <a href="#supercaps">2. Supercap Bank</a>
+        <a href="#gate-drive">3. Gate Drive & MOSFETs</a>
+        <a href="#sensing">4. ADC Sensing & Button</a>
+        <a href="#io-map">5. ESP32 I/O Map</a>
+        <a href="#bom">6. Bill of Materials</a>
+    </nav>
+    <main>
+
+        <!-- ==================== 1. POWER DISTRIBUTION ==================== -->
+        <section id="power">
+            <h2>1. Power Distribution <span>Battery → Buck Converters → Subsystems</span></h2>
+            <div class="diagram-wrap">
+                <svg viewBox="0 0 950 520" width="950" height="520">
+                    <!-- Title -->
+                    <text x="475" y="24" text-anchor="middle" class="title-text">POWER DISTRIBUTION</text>
+
+                    <!-- Battery Symbol -->
+                    <line x1="60" y1="80" x2="60" y2="100" class="wire" />
+                    <text x="60" y="72" text-anchor="middle" class="comp-label">+13V</text>
+                    <line x1="48" y1="100" x2="72" y2="100" stroke="#111" stroke-width="3" />
+                    <line x1="53" y1="108" x2="67" y2="108" stroke="#111" stroke-width="1.5" />
+                    <line x1="48" y1="116" x2="72" y2="116" stroke="#111" stroke-width="3" />
+                    <line x1="53" y1="124" x2="67" y2="124" stroke="#111" stroke-width="1.5" />
+                    <line x1="60" y1="124" x2="60" y2="144" class="wire" />
+                    <text x="80" y="115" class="comp-value">13V Lead-Acid</text>
+                    <text x="40" y="96" class="comp-value">+</text>
+                    <text x="40" y="132" class="comp-value">−</text>
+
+                    <!-- GND symbol under battery -->
+                    <line x1="60" y1="144" x2="60" y2="155" class="wire" />
+                    <line x1="48" y1="155" x2="72" y2="155" stroke="#111" stroke-width="2" />
+                    <line x1="52" y1="160" x2="68" y2="160" stroke="#111" stroke-width="2" />
+                    <line x1="56" y1="165" x2="64" y2="165" stroke="#111" stroke-width="2" />
+
+                    <!-- Main power bus (vertical line from + terminal going right) -->
+                    <line x1="60" y1="80" x2="60" y2="60" class="wire-thick" />
+                    <line x1="60" y1="60" x2="180" y2="60" class="wire-thick" />
+                    <line x1="180" y1="60" x2="180" y2="380" class="wire-thick" />
+                    <!-- Junction dots -->
+                    <circle cx="180" cy="60" r="3.5" class="junction" />
+                    <circle cx="180" cy="160" r="3.5" class="junction" />
+                    <circle cx="180" cy="260" r="3.5" class="junction" />
+
+                    <!-- === PATH 1: 1A Buck → 13.5V → TC4428 === -->
+                    <line x1="180" y1="60" x2="260" y2="60" class="wire" />
+                    <rect x="260" y="42" width="130" height="36" class="comp-fill" rx="4" />
+                    <text x="325" y="57" text-anchor="middle" class="comp-label">1A Buck Module</text>
+                    <text x="325" y="69" text-anchor="middle" class="comp-value">13V → 13.5V</text>
+                    <line x1="390" y1="60" x2="470" y2="60" class="wire" />
+                    <text x="430" y="52" text-anchor="middle" class="comp-value">13.5V</text>
+                    <!-- Arrow -->
+                    <polygon points="460,56 470,60 460,64" fill="#111" />
+                    <!-- TC4428 box -->
+                    <rect x="470" y="40" width="160" height="40" class="comp-fill" rx="4" />
+                    <text x="550" y="57" text-anchor="middle" class="comp-label">TC4428 VDD</text>
+                    <text x="550" y="69" text-anchor="middle" class="comp-value">Gate Driver (always on)</text>
+                    <text x="640" y="55" class="pin-label">→ §3</text>
+
+                    <!-- === PATH 2: 3A Buck → 5.0V → ESP32 === -->
+                    <line x1="180" y1="160" x2="260" y2="160" class="wire" />
+                    <rect x="260" y="142" width="130" height="36" class="comp-fill" rx="4" />
+                    <text x="325" y="157" text-anchor="middle" class="comp-label">3A Buck Module</text>
+                    <text x="325" y="169" text-anchor="middle" class="comp-value">13V → 5.0V</text>
+                    <line x1="390" y1="160" x2="470" y2="160" class="wire" />
+                    <text x="430" y="152" text-anchor="middle" class="comp-value">5.0V</text>
+                    <polygon points="460,156 470,160 460,164" fill="#111" />
+                    <rect x="470" y="140" width="160" height="40" class="comp-fill" rx="4" />
+                    <text x="550" y="157" text-anchor="middle" class="comp-label">ESP32-S3 (P1 5VIN)</text>
+                    <text x="550" y="169" text-anchor="middle" class="comp-value">JC3248W535 (always on)</text>
+                    <text x="640" y="155" class="pin-label">→ §5</text>
+
+                    <!-- === PATH 3: 10A Buck-Boost → 5.5V → Supercaps === -->
+                    <line x1="180" y1="260" x2="260" y2="260" class="wire" />
+                    <rect x="260" y="235" width="160" height="50" class="comp-fill" rx="4" />
+                    <text x="340" y="253" text-anchor="middle" class="comp-label">10A CC/CV Buck-Boost</text>
+                    <text x="340" y="267" text-anchor="middle" class="comp-value">Set: 5.5V / 5A</text>
+                    <text x="340" y="279" text-anchor="middle" class="comp-value">Supercap Charger</text>
+
+                    <!-- KEY pin label and connection down to 2N2222 -->
+                    <text x="345" y="298" text-anchor="middle" class="pin-label">KEY</text>
+                    <line x1="340" y1="285" x2="340" y2="310" class="wire" />
+
+                    <!-- 2N2222 Transistor -->
+                    <!-- Base from right (from IO16 via 1k) -->
+                    <!-- Collector goes up to KEY -->
+                    <!-- Emitter goes down to GND -->
+                    <circle cx="340" cy="350" r="20" class="comp-stroke" fill="#f8f8f8" />
+                    <text x="340" y="345" text-anchor="middle" class="comp-label">2N2222</text>
+                    <text x="340" y="357" text-anchor="middle" class="comp-value">NPN</text>
+                    <!-- Collector line up to KEY -->
+                    <line x1="340" y1="330" x2="340" y2="310" class="wire" />
+                    <text x="354" y="320" class="comp-value">C</text>
+                    <!-- Emitter line down to GND -->
+                    <line x1="340" y1="370" x2="340" y2="400" class="wire" />
+                    <text x="354" y="385" class="comp-value">E</text>
+                    <!-- GND symbol -->
+                    <line x1="328" y1="400" x2="352" y2="400" stroke="#111" stroke-width="2" />
+                    <line x1="332" y1="405" x2="348" y2="405" stroke="#111" stroke-width="2" />
+                    <line x1="336" y1="410" x2="344" y2="410" stroke="#111" stroke-width="2" />
+
+                    <!-- Base line going left from transistor -->
+                    <line x1="320" y1="350" x2="270" y2="350" class="wire" />
+                    <text x="310" y="342" class="comp-value">B</text>
+
+                    <!-- 1kΩ resistor on base line -->
+                    <rect x="220" y="344" width="50" height="12" fill="#e8d8a0" stroke="#111" stroke-width="1.5"
+                        rx="2" />
+                    <text x="245" y="353" text-anchor="middle" class="comp-value">1kΩ</text>
+                    <line x1="220" y1="350" x2="190" y2="350" class="wire" />
+
+                    <!-- IO16 label -->
+                    <rect x="120" y="338" width="70" height="24" fill="#ddeeff" stroke="#0066cc" stroke-width="1"
+                        rx="3" />
+                    <text x="155" y="354" text-anchor="middle" class="pin-label">IO16</text>
+                    <text x="155" y="374" text-anchor="middle" class="comp-value">CHARGER_EN</text>
+                    <line x1="190" y1="350" x2="190" y2="350" class="wire" />
+
+                    <!-- Output of Buck-Boost going right -->
+                    <line x1="420" y1="260" x2="480" y2="260" class="wire" />
+                    <text x="450" y="252" text-anchor="middle" class="comp-value">5.5V</text>
+
+                    <!-- 30SQ060 Schottky Diode -->
+                    <!-- Triangle pointing right + bar -->
+                    <polygon points="490,248 510,260 490,272" fill="none" stroke="#111" stroke-width="2" />
+                    <line x1="510" y1="246" x2="510" y2="274" stroke="#111" stroke-width="2.5" />
+                    <line x1="480" y1="260" x2="490" y2="260" class="wire" />
+                    <line x1="510" y1="260" x2="560" y2="260" class="wire" />
+                    <text x="500" y="240" text-anchor="middle" class="comp-label">30SQ060</text>
+                    <text x="500" y="286" text-anchor="middle" class="comp-value">60V 30A Schottky</text>
+
+                    <!-- Arrow to Supercap Bank -->
+                    <polygon points="555,256 565,260 555,264" fill="#111" />
+                    <rect x="570" y="238" width="170" height="44" fill="#fff8e0" stroke="#cc8800" stroke-width="2"
+                        rx="6" />
+                    <text x="655" y="257" text-anchor="middle" class="comp-label">SUPERCAP BANK</text>
+                    <text x="655" y="271" text-anchor="middle" class="comp-value">2S2P · 4×3000F 3V · Max 5.7V</text>
+                    <text x="750" y="255" class="pin-label">→ §2</text>
+
+                    <!-- Truth Table Box -->
+                    <rect x="480" y="340" width="410" height="90" class="info-box" />
+                    <text x="685" y="358" text-anchor="middle" class="comp-label">Charger Control Truth Table</text>
+                    <line x1="490" y1="365" x2="880" y2="365" stroke="#0066cc" stroke-width="0.5" />
+                    <text x="500" y="380" class="comp-value">IO16 = LOW → 2N2222 OFF → KEY floating → Charger ON
+                        (charging)</text>
+                    <text x="500" y="396" class="comp-value">IO16 = HIGH → 2N2222 ON → KEY = GND → Charger OFF
+                        (welding)</text>
+                    <text x="500" y="418" class="note-text">⚠ Charger MUST be disabled during pulse to prevent back-feed
+                        damage</text>
+
+                    <!-- Safety note -->
+                    <rect x="480" y="450" width="410" height="40" class="danger-box" />
+                    <text x="685" y="466" text-anchor="middle" class="warn-text">⚠ IO16 is forced LOW at boot — charger
+                        starts ON (safe default)</text>
+                    <text x="685" y="480" text-anchor="middle" class="note-text">Inverted logic: LOW = charge, HIGH =
+                        disable charging</text>
+                </svg>
+            </div>
+        </section>
+
+        <!-- ==================== 2. SUPERCAP BANK ==================== -->
+        <section id="supercaps">
+            <h2>2. Supercap Bank <span>2-Series 2-Parallel · 3000F Total · 5.7V Operating</span></h2>
+            <div class="diagram-wrap">
+                <svg viewBox="0 0 700 480" width="700" height="480">
+                    <text x="350" y="24" text-anchor="middle" class="title-text">SUPERCAP BANK (2S2P
+                        Configuration)</text>
+
+                    <!-- Input from charger -->
+                    <text x="200" y="55" text-anchor="middle" class="pin-label">From 30SQ060 (+5.5V)</text>
+                    <line x1="200" y1="60" x2="200" y2="80" class="wire-thick" />
+                    <polygon points="196,75 200,85 204,75" fill="#111" />
+
+                    <!-- Top junction splitting to two parallel caps -->
+                    <line x1="200" y1="85" x2="200" y2="95" class="wire-thick" />
+                    <line x1="120" y1="95" x2="280" y2="95" class="wire-thick" />
+                    <circle cx="200" cy="95" r="3" class="junction" />
+
+                    <!-- Cap 1 (left top) -->
+                    <line x1="120" y1="95" x2="120" y2="130" class="wire" />
+                    <text x="116" y="118" text-anchor="end" class="comp-value">+</text>
+                    <!-- Capacitor symbol -->
+                    <line x1="105" y1="130" x2="135" y2="130" stroke="#111" stroke-width="3" />
+                    <line x1="105" y1="140" x2="135" y2="140" stroke="#111" stroke-width="1.5" />
+                    <line x1="120" y1="140" x2="120" y2="170" class="wire" />
+                    <text x="142" y="138" class="comp-label">C1</text>
+                    <text x="142" y="150" class="comp-value">3000F</text>
+                    <text x="142" y="160" class="comp-value">3.0V</text>
+
+                    <!-- Cap 2 (right top) -->
+                    <line x1="280" y1="95" x2="280" y2="130" class="wire" />
+                    <text x="276" y="118" text-anchor="end" class="comp-value">+</text>
+                    <line x1="265" y1="130" x2="295" y2="130" stroke="#111" stroke-width="3" />
+                    <line x1="265" y1="140" x2="295" y2="140" stroke="#111" stroke-width="1.5" />
+                    <line x1="280" y1="140" x2="280" y2="170" class="wire" />
+                    <text x="302" y="138" class="comp-label">C2</text>
+                    <text x="302" y="150" class="comp-value">3000F</text>
+                    <text x="302" y="160" class="comp-value">3.0V</text>
+
+                    <!-- Mid-point bus (series connection) -->
+                    <line x1="120" y1="170" x2="280" y2="170" class="wire-thick" />
+                    <circle cx="200" cy="170" r="3" class="junction" />
+                    <text x="310" y="174" class="comp-value">mid-point (~2.75V)</text>
+
+                    <!-- Also connect mid-point to drain bus label -->
+                    <line x1="200" y1="95" x2="350" y2="95" class="wire" stroke-dasharray="5,3" />
+                    <text x="400" y="99" class="pin-label">→ To MOSFET DRAIN BUS (§3)</text>
+
+                    <!-- Cap 3 (left bottom) -->
+                    <line x1="120" y1="170" x2="120" y2="205" class="wire" />
+                    <text x="116" y="193" text-anchor="end" class="comp-value">+</text>
+                    <line x1="105" y1="205" x2="135" y2="205" stroke="#111" stroke-width="3" />
+                    <line x1="105" y1="215" x2="135" y2="215" stroke="#111" stroke-width="1.5" />
+                    <line x1="120" y1="215" x2="120" y2="245" class="wire" />
+                    <text x="142" y="213" class="comp-label">C3</text>
+                    <text x="142" y="225" class="comp-value">3000F</text>
+                    <text x="142" y="235" class="comp-value">3.0V</text>
+
+                    <!-- Cap 4 (right bottom) -->
+                    <line x1="280" y1="170" x2="280" y2="205" class="wire" />
+                    <text x="276" y="193" text-anchor="end" class="comp-value">+</text>
+                    <line x1="265" y1="205" x2="295" y2="205" stroke="#111" stroke-width="3" />
+                    <line x1="265" y1="215" x2="295" y2="215" stroke="#111" stroke-width="1.5" />
+                    <line x1="280" y1="215" x2="280" y2="245" class="wire" />
+                    <text x="302" y="213" class="comp-label">C4</text>
+                    <text x="302" y="225" class="comp-value">3000F</text>
+                    <text x="302" y="235" class="comp-value">3.0V</text>
+
+                    <!-- Bottom junction to GND -->
+                    <line x1="120" y1="245" x2="280" y2="245" class="wire-thick" />
+                    <circle cx="200" cy="245" r="3" class="junction" />
+                    <line x1="200" y1="245" x2="200" y2="270" class="wire" />
+                    <!-- GND -->
+                    <line x1="186" y1="270" x2="214" y2="270" stroke="#111" stroke-width="2" />
+                    <line x1="190" y1="276" x2="210" y2="276" stroke="#111" stroke-width="2" />
+                    <line x1="194" y1="282" x2="206" y2="282" stroke="#111" stroke-width="2" />
+                    <text x="200" y="298" text-anchor="middle" class="comp-value">GND</text>
+
+                    <!-- Parallel indicators -->
+                    <text x="200" y="90" text-anchor="middle" class="note-text">parallel</text>
+                    <text x="200" y="183" text-anchor="middle" class="note-text">series</text>
+                    <text x="200" y="260" text-anchor="middle" class="note-text">parallel</text>
+
+                    <!-- Specs box -->
+                    <rect x="400" y="130" width="260" height="140" class="info-box" />
+                    <text x="530" y="150" text-anchor="middle" class="comp-label">Bank Specifications</text>
+                    <line x1="410" y1="156" x2="650" y2="156" stroke="#0066cc" stroke-width="0.5" />
+                    <text x="415" y="172" class="comp-value">Topology: 2-Series, 2-Parallel (2S2P)</text>
+                    <text x="415" y="188" class="comp-value">Total Capacitance: 3000F</text>
+                    <text x="415" y="204" class="comp-value">Max Voltage: 6.0V (2 × 3.0V series)</text>
+                    <text x="415" y="220" class="comp-value">Operating: 5.7V (derated for longevity)</text>
+                    <text x="415" y="236" class="comp-value">Stored Energy @5.7V: 48,735 J</text>
+                    <text x="415" y="252" class="comp-value">Peak Discharge: ~2000A</text>
+
+                    <!-- Danger box -->
+                    <rect x="400" y="290" width="260" height="50" class="danger-box" />
+                    <text x="530" y="310" text-anchor="middle" class="warn-text">⚠ DANGER: 49kJ STORED ENERGY</text>
+                    <text x="530" y="328" text-anchor="middle" class="note-text">Discharge supercaps fully before any
+                        servicing!</text>
+
+                    <!-- Calculation note -->
+                    <rect x="400" y="360" width="260" height="80" class="info-box" />
+                    <text x="530" y="378" text-anchor="middle" class="comp-label">Capacitance Calculation</text>
+                    <line x1="410" y1="384" x2="650" y2="384" stroke="#0066cc" stroke-width="0.5" />
+                    <text x="415" y="400" class="comp-value">Parallel: 3000F + 3000F = 6000F each pair</text>
+                    <text x="415" y="416" class="comp-value">Series: 1/(1/6000 + 1/6000) = 3000F total</text>
+                    <text x="415" y="432" class="comp-value">E = ½CV² = ½×3000×5.7² = 48,735 J</text>
+                </svg>
+            </div>
+        </section>
+
+        <!-- ==================== 3. GATE DRIVE & MOSFET BANK ==================== -->
+        <section id="gate-drive">
+            <h2>3. Gate Drive & MOSFET Bank <span>TC4428 → 16× IXTP170N075T2</span></h2>
+            <div class="diagram-wrap">
+                <svg viewBox="0 0 950 580" width="950" height="580">
+                    <text x="475" y="24" text-anchor="middle" class="title-text">GATE DRIVE CIRCUIT & MOSFET BANK</text>
+
+                    <!-- 13.5V Rail input -->
+                    <text x="30" y="65" class="pin-label">13.5V (from 1A Buck §1)</text>
+                    <line x1="30" y1="70" x2="30" y2="100" class="wire" />
+                    <line x1="30" y1="100" x2="120" y2="100" class="wire" />
+                    <circle cx="30" cy="100" r="3" class="junction" />
+
+                    <!-- TVS Diode on rail -->
+                    <line x1="30" y1="100" x2="30" y2="140" class="wire" />
+                    <!-- TVS symbol (bidirectional) -->
+                    <polygon points="18,140 42,140 30,160" fill="none" stroke="#111" stroke-width="2" />
+                    <line x1="18" y1="160" x2="42" y2="160" stroke="#111" stroke-width="2.5" />
+                    <line x1="18" y1="160" x2="18" y2="156" stroke="#111" stroke-width="1.5" />
+                    <line x1="42" y1="160" x2="42" y2="164" stroke="#111" stroke-width="1.5" />
+                    <polygon points="18,160 42,160 30,180" fill="none" stroke="#111" stroke-width="2" />
+                    <line x1="30" y1="180" x2="30" y2="210" class="wire" />
+                    <text x="50" y="165" class="comp-label">1.SKE12CA</text>
+                    <text x="50" y="177" class="comp-value">12V Bidirectional TVS</text>
+                    <!-- GND -->
+                    <line x1="18" y1="210" x2="42" y2="210" stroke="#111" stroke-width="2" />
+                    <line x1="22" y1="215" x2="38" y2="215" stroke="#111" stroke-width="2" />
+                    <line x1="26" y1="220" x2="34" y2="220" stroke="#111" stroke-width="2" />
+
+                    <!-- TC4428 IC Box -->
+                    <rect x="120" y="70" width="140" height="130" class="comp-fill" rx="4" />
+                    <text x="190" y="92" text-anchor="middle" class="comp-label">TC4428</text>
+                    <text x="190" y="105" text-anchor="middle" class="comp-value">Dual MOSFET Driver</text>
+                    <!-- Pin labels inside -->
+                    <text x="130" y="125" class="pin-label">IN_A (2)</text>
+                    <text x="130" y="145" class="pin-label">IN_B (4)</text>
+                    <text x="130" y="165" class="pin-label">GND (3)</text>
+                    <text x="210" y="125" class="pin-label">OUT_A (7)</text>
+                    <text x="210" y="145" class="pin-label">OUT_B (5)</text>
+                    <text x="210" y="185" class="pin-label">VDD (8)</text>
+                    <!-- VDD connection -->
+                    <line x1="120" y1="100" x2="120" y2="180" class="wire" />
+                    <line x1="120" y1="180" x2="135" y2="180" class="wire" />
+
+                    <!-- IO46 Input Signal -->
+                    <rect x="10" y="120" width="60" height="24" fill="#ddeeff" stroke="#0066cc" stroke-width="1"
+                        rx="3" />
+                    <text x="40" y="136" text-anchor="middle" class="pin-label">IO46</text>
+                    <text x="40" y="152" text-anchor="middle" class="comp-value">OUTPUT_PIN</text>
+                    <line x1="70" y1="132" x2="90" y2="132" class="wire" />
+                    <!-- Split to IN_A and IN_B -->
+                    <line x1="90" y1="132" x2="90" y2="120" class="wire" />
+                    <line x1="90" y1="120" x2="120" y2="120" class="wire" />
+                    <line x1="90" y1="132" x2="90" y2="140" class="wire" />
+                    <line x1="90" y1="140" x2="120" y2="140" class="wire" />
+                    <circle cx="90" cy="132" r="2.5" class="junction" />
+                    <text x="100" y="115" class="note-text">paralleled</text>
+
+                    <!-- GND pin -->
+                    <line x1="190" y1="160" x2="190" y2="200" class="wire" />
+                    <line x1="178" y1="210" x2="202" y2="210" stroke="#111" stroke-width="2" />
+                    <line x1="182" y1="215" x2="198" y2="215" stroke="#111" stroke-width="2" />
+                    <line x1="186" y1="220" x2="194" y2="220" stroke="#111" stroke-width="2" />
+
+                    <!-- OUT_A and OUT_B paralleled -->
+                    <line x1="260" y1="120" x2="290" y2="120" class="wire" />
+                    <line x1="260" y1="140" x2="290" y2="140" class="wire" />
+                    <line x1="290" y1="120" x2="290" y2="140" class="wire" />
+                    <circle cx="290" cy="130" r="2.5" class="junction" />
+                    <text x="275" y="113" class="note-text">paralleled</text>
+
+                    <!-- Gate Bus line -->
+                    <line x1="290" y1="130" x2="380" y2="130" class="wire-thick" />
+                    <text x="335" y="122" text-anchor="middle" class="comp-label">GATE BUS</text>
+
+                    <!-- 16 MOSFET paths (show 4 explicit + dots) -->
+                    <!-- Vertical distribution lines from gate bus -->
+                    <line x1="380" y1="50" x2="380" y2="400" class="wire" stroke-dasharray="none" />
+
+                    <!-- MOSFET Q1 -->
+                    <line x1="380" y1="80" x2="420" y2="80" class="wire" />
+                    <circle cx="380" cy="80" r="2.5" class="junction" />
+                    <!-- 10R gate resistor -->
+                    <rect x="420" y="74" width="40" height="12" fill="#e8d8a0" stroke="#111" stroke-width="1.2"
+                        rx="2" />
+                    <text x="440" y="83" text-anchor="middle" class="comp-value">10Ω</text>
+                    <line x1="460" y1="80" x2="490" y2="80" class="wire" />
+                    <!-- MOSFET symbol (simplified) -->
+                    <rect x="490" y="55" width="50" height="50" fill="#f0f0f0" stroke="#111" stroke-width="1.5"
+                        rx="3" />
+                    <text x="515" y="74" text-anchor="middle" class="comp-value">Q1</text>
+                    <text x="515" y="96" text-anchor="middle" class="comp-value"
+                        style="font-size:8px">IXTP170N075T2</text>
+                    <text x="488" y="70" text-anchor="end" class="pin-label">G</text>
+                    <text x="515" y="52" text-anchor="middle" class="pin-label">D</text>
+                    <text x="515" y="118" text-anchor="middle" class="pin-label">S</text>
+                    <!-- Drain up -->
+                    <line x1="515" y1="55" x2="515" y2="40" class="wire" />
+                    <!-- Source down -->
+                    <line x1="515" y1="105" x2="515" y2="120" class="wire" />
+
+                    <!-- MOSFET Q2 -->
+                    <line x1="380" y1="160" x2="420" y2="160" class="wire" />
+                    <circle cx="380" cy="160" r="2.5" class="junction" />
+                    <rect x="420" y="154" width="40" height="12" fill="#e8d8a0" stroke="#111" stroke-width="1.2"
+                        rx="2" />
+                    <text x="440" y="163" text-anchor="middle" class="comp-value">10Ω</text>
+                    <line x1="460" y1="160" x2="490" y2="160" class="wire" />
+                    <rect x="490" y="135" width="50" height="50" fill="#f0f0f0" stroke="#111" stroke-width="1.5"
+                        rx="3" />
+                    <text x="515" y="154" text-anchor="middle" class="comp-value">Q2</text>
+                    <line x1="515" y1="135" x2="515" y2="120" class="wire" />
+                    <line x1="515" y1="185" x2="515" y2="200" class="wire" />
+
+                    <!-- MOSFET Q3 -->
+                    <line x1="380" y1="240" x2="420" y2="240" class="wire" />
+                    <circle cx="380" cy="240" r="2.5" class="junction" />
+                    <rect x="420" y="234" width="40" height="12" fill="#e8d8a0" stroke="#111" stroke-width="1.2"
+                        rx="2" />
+                    <text x="440" y="243" text-anchor="middle" class="comp-value">10Ω</text>
+                    <line x1="460" y1="240" x2="490" y2="240" class="wire" />
+                    <rect x="490" y="215" width="50" height="50" fill="#f0f0f0" stroke="#111" stroke-width="1.5"
+                        rx="3" />
+                    <text x="515" y="234" text-anchor="middle" class="comp-value">Q3</text>
+                    <line x1="515" y1="215" x2="515" y2="200" class="wire" />
+                    <line x1="515" y1="265" x2="515" y2="280" class="wire" />
+
+                    <!-- Dots indicating Q4-Q15 -->
+                    <text x="515" y="310" text-anchor="middle" class="comp-label">⋮</text>
+                    <text x="515" y="325" text-anchor="middle" class="comp-value">Q4 – Q15</text>
+                    <text x="515" y="340" text-anchor="middle" class="comp-value">(12 more)</text>
+                    <circle cx="380" cy="310" r="2" class="junction" />
+                    <circle cx="380" cy="320" r="2" class="junction" />
+                    <circle cx="380" cy="330" r="2" class="junction" />
+
+                    <!-- MOSFET Q16 -->
+                    <line x1="380" y1="380" x2="420" y2="380" class="wire" />
+                    <circle cx="380" cy="380" r="2.5" class="junction" />
+                    <rect x="420" y="374" width="40" height="12" fill="#e8d8a0" stroke="#111" stroke-width="1.2"
+                        rx="2" />
+                    <text x="440" y="383" text-anchor="middle" class="comp-value">10Ω</text>
+                    <line x1="460" y1="380" x2="490" y2="380" class="wire" />
+                    <rect x="490" y="355" width="50" height="50" fill="#f0f0f0" stroke="#111" stroke-width="1.5"
+                        rx="3" />
+                    <text x="515" y="374" text-anchor="middle" class="comp-value">Q16</text>
+                    <line x1="515" y1="355" x2="515" y2="345" class="wire" />
+                    <line x1="515" y1="405" x2="515" y2="420" class="wire" />
+
+                    <!-- DRAIN BUS (all drains connected vertically) -->
+                    <line x1="515" y1="40" x2="600" y2="40" class="wire" />
+                    <line x1="600" y1="40" x2="600" y2="345" class="wire-thick" stroke="#cc0000" />
+                    <text x="618" y="60" class="warn-text">DRAIN BUS</text>
+                    <text x="618" y="75" class="comp-value">(all 16 drains)</text>
+                    <text x="618" y="90" class="pin-label">← Supercap (+)</text>
+
+                    <!-- SOURCE BUS (all sources connected vertically) -->
+                    <line x1="515" y1="120" x2="560" y2="120" class="wire" />
+                    <line x1="515" y1="200" x2="560" y2="200" class="wire" />
+                    <line x1="515" y1="280" x2="560" y2="280" class="wire" />
+                    <line x1="515" y1="420" x2="560" y2="420" class="wire" />
+                    <line x1="560" y1="120" x2="560" y2="420" class="wire-thick" stroke="#0066cc" />
+                    <text x="565" y="450" class="pin-label">SOURCE BUS</text>
+                    <text x="565" y="465" class="comp-value">(all 16 sources)</text>
+
+                    <!-- Electrodes -->
+                    <line x1="560" y1="420" x2="560" y2="480" class="wire-thick" />
+                    <text x="540" y="490" text-anchor="middle" class="comp-label">(+)</text>
+                    <line x1="560" y1="480" x2="520" y2="500" class="wire" />
+                    <line x1="560" y1="480" x2="600" y2="500" class="wire" />
+                    <text x="520" y="516" text-anchor="middle" class="comp-label">ELECTRODE</text>
+                    <text x="600" y="516" text-anchor="middle" class="comp-label">ELECTRODE</text>
+                    <!-- Workpiece -->
+                    <rect x="500" y="518" width="120" height="14" fill="#d0d0d0" stroke="#888" stroke-width="1"
+                        rx="2" />
+                    <text x="560" y="528" text-anchor="middle" class="comp-value">Workpiece</text>
+                    <line x1="560" y1="532" x2="560" y2="550" class="wire" />
+                    <text x="580" y="548" class="comp-value">(−) GND</text>
+                    <line x1="548" y1="550" x2="572" y2="550" stroke="#111" stroke-width="2" />
+                    <line x1="552" y1="555" x2="568" y2="555" stroke="#111" stroke-width="2" />
+                    <line x1="556" y1="560" x2="564" y2="560" stroke="#111" stroke-width="2" />
+
+                    <!-- Specs box -->
+                    <rect x="660" y="120" width="260" height="130" class="info-box" />
+                    <text x="790" y="140" text-anchor="middle" class="comp-label">MOSFET Bank Specs</text>
+                    <line x1="670" y1="146" x2="910" y2="146" stroke="#0066cc" stroke-width="0.5" />
+                    <text x="675" y="162" class="comp-value">Part: IXTP170N075T2 (×16)</text>
+                    <text x="675" y="178" class="comp-value">Vds: 75V / Id: 170A / Rds(on): 2.1mΩ</text>
+                    <text x="675" y="194" class="comp-value">Package: TO-220</text>
+                    <text x="675" y="210" class="comp-value">Combined Rds(on): 2.1mΩ/16 ≈ 0.13mΩ</text>
+                    <text x="675" y="226" class="comp-value">Peak current: ~2000A</text>
+                    <text x="675" y="242" class="comp-value">Gate drive: 13.5V (fully enhanced)</text>
+
+                    <rect x="660" y="270" width="260" height="50" class="danger-box" />
+                    <text x="790" y="290" text-anchor="middle" class="warn-text">⚠ ~2000A through electrode tips</text>
+                    <text x="790" y="306" text-anchor="middle" class="note-text">Use heavy-gauge copper bus bars for
+                        drain/source</text>
+                </svg>
+            </div>
+        </section>
+
+        <!-- ==================== 4. ADC SENSING & BUTTON ==================== -->
+        <section id="sensing">
+            <h2>4. ADC Sensing Circuits & Weld Button <span>Voltage Dividers + Contact Detect + Physical Trigger</span>
+            </h2>
+            <div class="diagram-wrap">
+                <svg viewBox="0 0 950 480" width="950" height="480">
+                    <text x="475" y="24" text-anchor="middle" class="title-text">ADC VOLTAGE DIVIDERS & WELD
+                        BUTTON</text>
+
+                    <!-- ===== Circuit A: Supercap Voltage (IO5) ===== -->
+                    <text x="100" y="55" text-anchor="middle" class="comp-label">A) Supercap Voltage</text>
+                    <text x="100" y="68" text-anchor="middle" class="pin-label">IO5 / ADC1_CH4</text>
+
+                    <!-- Source: Supercap (+) -->
+                    <text x="100" y="95" text-anchor="middle" class="comp-value">Supercap (+)</text>
+                    <line x1="100" y1="100" x2="100" y2="120" class="wire" />
+
+                    <!-- R1 = 10kΩ -->
+                    <rect x="85" y="120" width="30" height="50" fill="#e8d8a0" stroke="#111" stroke-width="1.5"
+                        rx="2" />
+                    <text x="100" y="148" text-anchor="middle" class="comp-value">10kΩ</text>
+                    <text x="120" y="143" class="comp-label">R1</text>
+
+                    <!-- Junction point -->
+                    <line x1="100" y1="170" x2="100" y2="190" class="wire" />
+                    <circle cx="100" cy="190" r="3" class="junction" />
+
+                    <!-- Line to IO5 -->
+                    <line x1="100" y1="190" x2="170" y2="190" class="wire" />
+                    <rect x="170" y="178" width="50" height="24" fill="#ddeeff" stroke="#0066cc" stroke-width="1"
+                        rx="3" />
+                    <text x="195" y="194" text-anchor="middle" class="pin-label">IO5</text>
+
+                    <!-- R2 = 15kΩ to GND -->
+                    <line x1="100" y1="190" x2="100" y2="210" class="wire" />
+                    <rect x="85" y="210" width="30" height="50" fill="#e8d8a0" stroke="#111" stroke-width="1.5"
+                        rx="2" />
+                    <text x="100" y="238" text-anchor="middle" class="comp-value">15kΩ</text>
+                    <text x="120" y="233" class="comp-label">R2</text>
+                    <line x1="100" y1="260" x2="100" y2="280" class="wire" />
+                    <!-- GND -->
+                    <line x1="88" y1="280" x2="112" y2="280" stroke="#111" stroke-width="2" />
+                    <line x1="92" y1="285" x2="108" y2="285" stroke="#111" stroke-width="2" />
+                    <line x1="96" y1="290" x2="104" y2="290" stroke="#111" stroke-width="2" />
+
+                    <!-- Formula box -->
+                    <rect x="40" y="310" width="160" height="60" class="info-box" />
+                    <text x="120" y="328" text-anchor="middle" class="comp-value">Ratio = 15/(10+15) = 0.600</text>
+                    <text x="120" y="344" text-anchor="middle" class="comp-value">@5.7V → 3.42V at ADC</text>
+                    <text x="120" y="360" text-anchor="middle" class="comp-label" style="font-size:10px">V_real = V_adc
+                        × (25/15)</text>
+
+                    <!-- ===== Circuit B: Protection Rail (IO6) ===== -->
+                    <text x="340" y="55" text-anchor="middle" class="comp-label">B) Protection Rail</text>
+                    <text x="340" y="68" text-anchor="middle" class="pin-label">IO6 / ADC1_CH5</text>
+
+                    <text x="340" y="95" text-anchor="middle" class="comp-value">13.5V Rail</text>
+                    <line x1="340" y1="100" x2="340" y2="120" class="wire" />
+
+                    <!-- R1 = 47kΩ -->
+                    <rect x="325" y="120" width="30" height="50" fill="#e8d8a0" stroke="#111" stroke-width="1.5"
+                        rx="2" />
+                    <text x="340" y="148" text-anchor="middle" class="comp-value">47kΩ</text>
+                    <text x="360" y="143" class="comp-label">R1</text>
+
+                    <line x1="340" y1="170" x2="340" y2="190" class="wire" />
+                    <circle cx="340" cy="190" r="3" class="junction" />
+                    <line x1="340" y1="190" x2="410" y2="190" class="wire" />
+                    <rect x="410" y="178" width="50" height="24" fill="#ddeeff" stroke="#0066cc" stroke-width="1"
+                        rx="3" />
+                    <text x="435" y="194" text-anchor="middle" class="pin-label">IO6</text>
+
+                    <!-- R2 = 15kΩ to GND -->
+                    <line x1="340" y1="190" x2="340" y2="210" class="wire" />
+                    <rect x="325" y="210" width="30" height="50" fill="#e8d8a0" stroke="#111" stroke-width="1.5"
+                        rx="2" />
+                    <text x="340" y="238" text-anchor="middle" class="comp-value">15kΩ</text>
+                    <text x="360" y="233" class="comp-label">R2</text>
+                    <line x1="340" y1="260" x2="340" y2="280" class="wire" />
+                    <line x1="328" y1="280" x2="352" y2="280" stroke="#111" stroke-width="2" />
+                    <line x1="332" y1="285" x2="348" y2="285" stroke="#111" stroke-width="2" />
+                    <line x1="336" y1="290" x2="344" y2="290" stroke="#111" stroke-width="2" />
+
+                    <rect x="280" y="310" width="160" height="60" class="info-box" />
+                    <text x="360" y="328" text-anchor="middle" class="comp-value">Ratio = 15/(47+15) = 0.242</text>
+                    <text x="360" y="344" text-anchor="middle" class="comp-value">@13.5V → 3.27V at ADC</text>
+                    <text x="360" y="360" text-anchor="middle" class="comp-label" style="font-size:10px">V_real = V_adc
+                        × (62/15)</text>
+
+                    <!-- ===== Circuit C: Contact Detect (IO7) ===== -->
+                    <text x="580" y="55" text-anchor="middle" class="comp-label">C) Contact Detect</text>
+                    <text x="580" y="68" text-anchor="middle" class="pin-label">IO7 / ADC1_CH6</text>
+
+                    <text x="580" y="95" text-anchor="middle" class="comp-value">3.3V</text>
+                    <line x1="580" y1="100" x2="580" y2="120" class="wire" />
+
+                    <!-- 10kΩ pull-up -->
+                    <rect x="565" y="120" width="30" height="50" fill="#e8d8a0" stroke="#111" stroke-width="1.5"
+                        rx="2" />
+                    <text x="580" y="148" text-anchor="middle" class="comp-value">10kΩ</text>
+                    <text x="600" y="143" class="comp-value">pull-up</text>
+
+                    <line x1="580" y1="170" x2="580" y2="190" class="wire" />
+                    <circle cx="580" cy="190" r="3" class="junction" />
+                    <line x1="580" y1="190" x2="650" y2="190" class="wire" />
+                    <rect x="650" y="178" width="50" height="24" fill="#ddeeff" stroke="#0066cc" stroke-width="1"
+                        rx="3" />
+                    <text x="675" y="194" text-anchor="middle" class="pin-label">IO7</text>
+
+                    <!-- 100kΩ isolation -->
+                    <line x1="580" y1="190" x2="580" y2="210" class="wire" />
+                    <rect x="565" y="210" width="30" height="50" fill="#e8d8a0" stroke="#111" stroke-width="1.5"
+                        rx="2" />
+                    <text x="580" y="238" text-anchor="middle" class="comp-value">100kΩ</text>
+                    <text x="600" y="233" class="comp-value">isolation</text>
+                    <line x1="580" y1="260" x2="580" y2="285" class="wire" />
+                    <text x="580" y="298" text-anchor="middle" class="comp-value">Electrode Tip</text>
+
+                    <rect x="520" y="310" width="165" height="72" class="info-box" />
+                    <text x="602" y="328" text-anchor="middle" class="comp-value">Apart: IO7 ≈ 3.3V (high)</text>
+                    <text x="602" y="344" text-anchor="middle" class="comp-value">Touch: IO7 &lt; 1.5V (low)</text>
+                    <text x="602" y="360" text-anchor="middle" class="comp-label" style="font-size:10px">Threshold:
+                        1.5V</text>
+                    <text x="602" y="374" text-anchor="middle" class="note-text">(shorted through workpiece)</text>
+
+                    <!-- ===== Circuit D: Weld Button (IO14) ===== -->
+                    <text x="820" y="55" text-anchor="middle" class="comp-label">D) Weld Button</text>
+                    <text x="820" y="68" text-anchor="middle" class="pin-label">IO14 / START_PIN</text>
+
+                    <text x="820" y="95" text-anchor="middle" class="comp-value">3.3V</text>
+                    <line x1="820" y1="100" x2="820" y2="120" class="wire" />
+
+                    <!-- Internal pull-up (dashed) -->
+                    <rect x="805" y="120" width="30" height="50" fill="#f0e8e8" stroke="#111" stroke-width="1.2" rx="2"
+                        stroke-dasharray="4,2" />
+                    <text x="820" y="148" text-anchor="middle" class="comp-value">Pull-up</text>
+                    <text x="840" y="143" class="note-text">internal</text>
+
+                    <line x1="820" y1="170" x2="820" y2="190" class="wire" />
+                    <circle cx="820" cy="190" r="3" class="junction" />
+                    <line x1="820" y1="190" x2="890" y2="190" class="wire" />
+                    <rect x="890" y="178" width="50" height="24" fill="#ddeeff" stroke="#0066cc" stroke-width="1"
+                        rx="3" />
+                    <text x="915" y="194" text-anchor="middle" class="pin-label">IO14</text>
+
+                    <!-- NO Switch to GND -->
+                    <line x1="820" y1="190" x2="820" y2="220" class="wire" />
+                    <!-- Switch symbol (open contacts) -->
+                    <circle cx="820" cy="224" r="3" fill="none" stroke="#111" stroke-width="1.5" />
+                    <line x1="820" y1="227" x2="838" y2="240" stroke="#111" stroke-width="2" />
+                    <circle cx="820" cy="252" r="3" fill="none" stroke="#111" stroke-width="1.5" />
+                    <text x="844" y="240" class="comp-label">NO</text>
+                    <text x="844" y="252" class="comp-value">Momentary</text>
+
+                    <line x1="820" y1="255" x2="820" y2="280" class="wire" />
+                    <line x1="808" y1="280" x2="832" y2="280" stroke="#111" stroke-width="2" />
+                    <line x1="812" y1="285" x2="828" y2="285" stroke="#111" stroke-width="2" />
+                    <line x1="816" y1="290" x2="824" y2="290" stroke="#111" stroke-width="2" />
+
+                    <rect x="760" y="310" width="135" height="72" class="info-box" />
+                    <text x="827" y="328" text-anchor="middle" class="comp-value">Released: IO14 = HIGH</text>
+                    <text x="827" y="344" text-anchor="middle" class="comp-value">Pressed: IO14 = LOW</text>
+                    <text x="827" y="360" text-anchor="middle" class="comp-label" style="font-size:10px">Debounce:
+                        5ms</text>
+                    <text x="827" y="374" text-anchor="middle" class="note-text">Physical button only (safety)</text>
+
+                    <!-- Safety note bottom -->
+                    <rect x="40" y="400" width="870" height="50" class="danger-box" />
+                    <text x="475" y="418" text-anchor="middle" class="warn-text">⚠ SAFETY: Only the physical button
+                        (IO14) can fire in MANUAL mode</text>
+                    <text x="475" y="436" text-anchor="middle" class="note-text">BLE can only trigger in AUTO mode with
+                        contact detection. Touchscreen has NO weld button. This is a deliberate safety design.</text>
+                </svg>
+            </div>
+        </section>
+
+        <!-- ==================== 5. ESP32-S3 I/O MAP ==================== -->
+        <section id="io-map">
+            <h2>5. ESP32-S3 I/O Map <span>JC3248W535 Board · Pin Assignments</span></h2>
+            <div class="diagram-wrap">
+                <svg viewBox="0 0 950 520" width="950" height="520">
+                    <text x="475" y="24" text-anchor="middle" class="title-text">ESP32-S3 JC3248W535 — I/O ASSIGNMENT
+                        MAP</text>
+
+                    <!-- Main MCU Box -->
+                    <rect x="250" y="50" width="400" height="300" fill="#f0f8ff" stroke="#0066cc" stroke-width="2.5"
+                        rx="8" />
+                    <text x="450" y="80" text-anchor="middle" class="comp-label"
+                        style="font-size:14px">JC3248W535</text>
+                    <text x="450" y="96" text-anchor="middle" class="comp-value">ESP32-S3 N16R8 (16MB Flash QIO / 8MB
+                        PSRAM OPI)</text>
+
+                    <!-- Internal peripherals -->
+                    <rect x="270" y="110" width="160" height="100" fill="#e8f4e8" stroke="#4a9" stroke-width="1"
+                        rx="4" />
+                    <text x="350" y="128" text-anchor="middle" class="comp-label">Display (QSPI)</text>
+                    <text x="290" y="145" class="comp-value">CLK = IO47</text>
+                    <text x="290" y="157" class="comp-value">CS = IO45</text>
+                    <text x="290" y="169" class="comp-value">TE = IO38</text>
+                    <text x="290" y="181" class="comp-value">D0-D3 = IO21,48,40,39</text>
+                    <text x="290" y="197" class="comp-value">BL = IO1 (PWM)</text>
+                    <text x="350" y="208" text-anchor="middle" class="note-text">480×320 AXS15231B</text>
+
+                    <rect x="450" y="110" width="180" height="65" fill="#e8f4e8" stroke="#4a9" stroke-width="1"
+                        rx="4" />
+                    <text x="540" y="128" text-anchor="middle" class="comp-label">Audio (I2S)</text>
+                    <text x="465" y="145" class="comp-value">LRCLK = IO2</text>
+                    <text x="465" y="157" class="comp-value">BCLK = IO42</text>
+                    <text x="465" y="169" class="comp-value">DOUT = IO41 → P6 Speaker</text>
+
+                    <rect x="450" y="185" width="180" height="40" fill="#e8f4e8" stroke="#4a9" stroke-width="1"
+                        rx="4" />
+                    <text x="540" y="200" text-anchor="middle" class="comp-label">Touch (I2C)</text>
+                    <text x="465" y="216" class="comp-value">SCL=IO8 SDA=IO4 @0x3B</text>
+
+                    <rect x="450" y="235" width="180" height="40" fill="#e8f4e8" stroke="#4a9" stroke-width="1"
+                        rx="4" />
+                    <text x="540" y="250" text-anchor="middle" class="comp-label">SD Card (SPI)</text>
+                    <text x="465" y="270" class="comp-value">CLK=12 MOSI=11 MISO=13 CS=10</text>
+
+                    <!-- External I/O connections (LEFT side - Inputs) -->
+                    <!-- IO5 -->
+                    <line x1="170" y1="160" x2="250" y2="160" class="wire" />
+                    <rect x="100" y="148" width="70" height="24" fill="#fff8e0" stroke="#cc8800" stroke-width="1"
+                        rx="3" />
+                    <text x="135" y="164" text-anchor="middle" class="pin-label">IO5 (ADC)</text>
+                    <text x="90" y="164" text-anchor="end" class="comp-value">V_sense ←</text>
+
+                    <!-- IO6 -->
+                    <line x1="170" y1="195" x2="250" y2="195" class="wire" />
+                    <rect x="100" y="183" width="70" height="24" fill="#fff8e0" stroke="#cc8800" stroke-width="1"
+                        rx="3" />
+                    <text x="135" y="199" text-anchor="middle" class="pin-label">IO6 (ADC)</text>
+                    <text x="90" y="199" text-anchor="end" class="comp-value">P_sense ←</text>
+
+                    <!-- IO7 -->
+                    <line x1="170" y1="230" x2="250" y2="230" class="wire" />
+                    <rect x="100" y="218" width="70" height="24" fill="#fff8e0" stroke="#cc8800" stroke-width="1"
+                        rx="3" />
+                    <text x="135" y="234" text-anchor="middle" class="pin-label">IO7 (ADC)</text>
+                    <text x="90" y="234" text-anchor="end" class="comp-value">Contact ←</text>
+
+                    <!-- IO14 -->
+                    <line x1="170" y1="265" x2="250" y2="265" class="wire" />
+                    <rect x="100" y="253" width="70" height="24" fill="#fff8e0" stroke="#cc8800" stroke-width="1"
+                        rx="3" />
+                    <text x="135" y="269" text-anchor="middle" class="pin-label">IO14 (IN)</text>
+                    <text x="90" y="269" text-anchor="end" class="comp-value">Button ←</text>
+
+                    <!-- External I/O connections (RIGHT side - Outputs) -->
+                    <!-- IO46 -->
+                    <line x1="650" y1="160" x2="730" y2="160" class="wire" />
+                    <rect x="730" y="148" width="80" height="24" fill="#ffe0e0" stroke="#cc0000" stroke-width="1"
+                        rx="3" />
+                    <text x="770" y="164" text-anchor="middle" class="pin-label">IO46 (OUT)</text>
+                    <text x="820" y="164" class="comp-value">→ TC4428</text>
+
+                    <!-- IO16 -->
+                    <line x1="650" y1="195" x2="730" y2="195" class="wire" />
+                    <rect x="730" y="183" width="80" height="24" fill="#ffe0e0" stroke="#cc0000" stroke-width="1"
+                        rx="3" />
+                    <text x="770" y="199" text-anchor="middle" class="pin-label">IO16 (OUT)</text>
+                    <text x="820" y="199" class="comp-value">→ Charger EN</text>
+
+                    <!-- BLE Antenna -->
+                    <line x1="650" y1="260" x2="700" y2="260" class="wire" />
+                    <text x="710" y="264" class="comp-label">📡 BLE</text>
+                    <text x="710" y="278" class="comp-value">NimBLE (internal)</text>
+
+                    <!-- P1 Header -->
+                    <rect x="270" y="300" width="150" height="40" fill="#e8e8f8" stroke="#666" stroke-width="1"
+                        rx="3" />
+                    <text x="345" y="316" text-anchor="middle" class="comp-label">P1 (UART/Power)</text>
+                    <text x="345" y="332" text-anchor="middle" class="comp-value">5VIN | TXD | RXD | GND</text>
+
+                    <!-- P2 Header -->
+                    <rect x="440" y="300" width="200" height="40" fill="#e8e8f8" stroke="#666" stroke-width="1"
+                        rx="3" />
+                    <text x="540" y="316" text-anchor="middle" class="comp-label">P2 (User I/O)</text>
+                    <text x="540" y="332" text-anchor="middle"
+                        class="comp-value">IO5|IO6|IO7|IO15|IO16|IO46|IO9|IO14</text>
+
+                    <!-- Pin mapping table -->
+                    <rect x="60" y="370" width="830" height="130" class="info-box" />
+                    <text x="475" y="390" text-anchor="middle" class="comp-label">P2 Header Pin Assignment (left to
+                        right)</text>
+                    <line x1="70" y1="396" x2="880" y2="396" stroke="#0066cc" stroke-width="0.5" />
+                    <text x="80" y="415" class="comp-value">Pin 1: IO5 → Supercap voltage ADC (10k/15k divider)</text>
+                    <text x="80" y="430" class="comp-value">Pin 2: IO6 → Protection rail ADC (47k/15k divider)</text>
+                    <text x="80" y="445" class="comp-value">Pin 3: IO7 → Contact detection ADC (10k pull-up + 100k
+                        isolation)</text>
+                    <text x="80" y="460" class="comp-value">Pin 4: IO15 → Spare (unused)</text>
+                    <text x="500" y="415" class="comp-value">Pin 5: IO16 → Charger enable (via 1kΩ → 2N2222 →
+                        KEY)</text>
+                    <text x="500" y="430" class="comp-value">Pin 6: IO46 → MOSFET fire signal (→ TC4428)</text>
+                    <text x="500" y="445" class="comp-value">Pin 7: IO9 → Spare (ADC1_CH8)</text>
+                    <text x="500" y="460" class="comp-value">Pin 8: IO14 → Weld button (internal pull-up, active
+                        LOW)</text>
+
+                    <!-- Boot safety note -->
+                    <text x="475" y="490" text-anchor="middle" class="warn-text">⚠ IO46 and IO16 are forced LOW at boot
+                        — safe default (MOSFETs OFF, charger ON)</text>
+                </svg>
+            </div>
+        </section>
+
+        <!-- ==================== 6. BOM ==================== -->
+        <section id="bom">
+            <h2>6. Bill of Materials <span>21 Components</span></h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Component</th>
+                        <th>Part / Value</th>
+                        <th>Qty</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>1</td>
+                        <td>MCU Board</td>
+                        <td>JC3248W535</td>
+                        <td>1</td>
+                        <td>ESP32-S3 N16R8 + 480×320 display + capacitive touch</td>
+                    </tr>
+                    <tr>
+                        <td>2</td>
+                        <td>MOSFET</td>
+                        <td>IXTP170N075T2</td>
+                        <td>16</td>
+                        <td>75V / 170A / 2.1mΩ Rds(on) / TO-220</td>
+                    </tr>
+                    <tr>
+                        <td>3</td>
+                        <td>Gate Driver IC</td>
+                        <td>TC4428</td>
+                        <td>1</td>
+                        <td>Dual channel, both inputs & outputs paralleled</td>
+                    </tr>
+                    <tr>
+                        <td>4</td>
+                        <td>Gate Resistors</td>
+                        <td>10Ω</td>
+                        <td>16</td>
+                        <td>One per MOSFET gate (current limiting)</td>
+                    </tr>
+                    <tr>
+                        <td>5</td>
+                        <td>TVS Diode</td>
+                        <td>1.SKE12CA</td>
+                        <td>1</td>
+                        <td>12V bidirectional — gate driver protection</td>
+                    </tr>
+                    <tr>
+                        <td>6</td>
+                        <td>Charger Module</td>
+                        <td>10A CC/CV Buck-Boost</td>
+                        <td>1</td>
+                        <td>Set to 5.5V / 5A output</td>
+                    </tr>
+                    <tr>
+                        <td>7</td>
+                        <td>Schottky Diode</td>
+                        <td>30SQ060</td>
+                        <td>1</td>
+                        <td>60V 30A — reverse blocking for supercaps</td>
+                    </tr>
+                    <tr>
+                        <td>8</td>
+                        <td>Switch Transistor</td>
+                        <td>2N2222</td>
+                        <td>1</td>
+                        <td>NPN — charger KEY pin isolation</td>
+                    </tr>
+                    <tr>
+                        <td>9</td>
+                        <td>Base Resistor</td>
+                        <td>1kΩ</td>
+                        <td>1</td>
+                        <td>IO16 to 2N2222 base</td>
+                    </tr>
+                    <tr>
+                        <td>10</td>
+                        <td>Logic Buck</td>
+                        <td>3A Buck Module</td>
+                        <td>1</td>
+                        <td>13V → 5.0V for ESP32 (via P1 5VIN)</td>
+                    </tr>
+                    <tr>
+                        <td>11</td>
+                        <td>Gate Buck</td>
+                        <td>1A Buck Module</td>
+                        <td>1</td>
+                        <td>13V → 13.5V for TC4428 VDD</td>
+                    </tr>
+                    <tr>
+                        <td>12</td>
+                        <td>Supercapacitors</td>
+                        <td>3.0V 3000F</td>
+                        <td>4</td>
+                        <td>2S2P config → 3000F / 5.7V operating</td>
+                    </tr>
+                    <tr>
+                        <td>13</td>
+                        <td>V-Divider R1</td>
+                        <td>10kΩ</td>
+                        <td>1</td>
+                        <td>Supercap voltage sense (upper)</td>
+                    </tr>
+                    <tr>
+                        <td>14</td>
+                        <td>V-Divider R2</td>
+                        <td>15kΩ</td>
+                        <td>1</td>
+                        <td>Supercap voltage sense (lower)</td>
+                    </tr>
+                    <tr>
+                        <td>15</td>
+                        <td>P-Divider R1</td>
+                        <td>47kΩ</td>
+                        <td>1</td>
+                        <td>Protection rail sense (upper)</td>
+                    </tr>
+                    <tr>
+                        <td>16</td>
+                        <td>P-Divider R2</td>
+                        <td>15kΩ</td>
+                        <td>1</td>
+                        <td>Protection rail sense (lower)</td>
+                    </tr>
+                    <tr>
+                        <td>17</td>
+                        <td>Contact Pull-up</td>
+                        <td>10kΩ</td>
+                        <td>1</td>
+                        <td>IO7 to 3.3V (electrode detection)</td>
+                    </tr>
+                    <tr>
+                        <td>18</td>
+                        <td>Contact Isolation</td>
+                        <td>100kΩ</td>
+                        <td>1</td>
+                        <td>IO7 to electrode tip (ADC protection)</td>
+                    </tr>
+                    <tr>
+                        <td>19</td>
+                        <td>Battery</td>
+                        <td>13V Lead-Acid</td>
+                        <td>1</td>
+                        <td>External power source</td>
+                    </tr>
+                    <tr>
+                        <td>20</td>
+                        <td>Weld Button</td>
+                        <td>Momentary NO</td>
+                        <td>1</td>
+                        <td>Physical trigger (IO14, active LOW)</td>
+                    </tr>
+                    <tr>
+                        <td>21</td>
+                        <td>Speaker</td>
+                        <td>8Ω small</td>
+                        <td>1</td>
+                        <td>Connects to P6 (I2S audio output)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="safety-note">
+                <strong>⚠️ DANGER WARNING:</strong> This device stores approximately <strong>49,000 Joules</strong> of
+                energy and can deliver peak currents of <strong>~2,000 Amperes</strong>.
+                Always discharge the supercap bank fully before any servicing. Never touch electrode tips during
+                operation.
+                Use appropriate personal protective equipment. This project is for experienced electronics builders
+                only.
+            </div>
+        </section>
+
+    </main>
+</body>
+
+</html>

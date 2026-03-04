@@ -8,6 +8,7 @@ idf_component_register(
         "ui.c"
         "ble_serial.c"
         "ota.c"
+        "encoder.c"
         "esp_lcd_axs15231b.c"
         "esp_lcd_touch.c"
     INCLUDE_DIRS

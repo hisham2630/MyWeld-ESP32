@@ -26,6 +26,7 @@
 #include "ble_serial.h"
 #include "config.h"
 #include "display.h"
+#include "encoder.h"
 #include "ota.h"
 #include "settings.h"
 #include "ui.h"
@@ -148,6 +149,9 @@ void app_main(void) {
 
   // Initialize display (QSPI + LVGL)
   display_init();
+
+  // Initialize rotary encoder (ISR + GPIO)
+  encoder_init();
 
   // ========================================
   // PHASE 4: Application initialization

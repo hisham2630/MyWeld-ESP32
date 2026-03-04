@@ -16,6 +16,7 @@
 #include "audio.h"
 #include "ble_serial.h"
 #include "display.h"
+#include "encoder.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -116,12 +117,16 @@ static lv_chart_series_t *chart_series = NULL;
 static lv_obj_t *volt_container = NULL;  // promoted to global for mode-toggle repositioning
 static lv_obj_t *lbl_ble_icon = NULL;    // BLE connected indicator (shown/hidden)
 
-
 // Settings screen widgets (stored globally so BLE refresh can update them)
 static lv_obj_t *slider_brightness = NULL;
 static lv_obj_t *slider_volume = NULL;
 static lv_obj_t *sw_sound_global = NULL;
 static lv_obj_t *sw_theme_global = NULL;
+
+// Widgets promoted to global for encoder focus access
+static lv_obj_t *s_btn_settings = NULL;  // Settings gear button (main screen)
+static lv_obj_t *s_btn_back = NULL;      // Back button (settings screen)
+static lv_obj_t *s_dd_preset = NULL;     // Preset dropdown (settings screen)
 
 // Parameter cards
 typedef struct {
@@ -138,6 +143,54 @@ typedef struct {
 } param_card_t;
 
 static param_card_t card_p1, card_t, card_p2, card_s;
+
+// ============================================================================
+// Encoder Navigation State
+// ============================================================================
+
+typedef enum {
+    ENC_SCREEN_MAIN,
+    ENC_SCREEN_SETTINGS
+} enc_screen_t;
+
+typedef enum {
+    ENC_MODE_NAVIGATE,   // Rotate = move focus highlight
+    ENC_MODE_EDIT        // Rotate = change value of focused item
+} enc_mode_t;
+
+// Focus item types (determines KEY press and rotate behavior)
+typedef enum {
+    FTYPE_PARAM,     // P1/T/P2/S — editable param_card_t
+    FTYPE_TOGGLE,    // AUTO/MAN, Sound, Theme — toggle on KEY press
+    FTYPE_ACTION,    // Settings, Back — execute on KEY press
+    FTYPE_SLIDER,    // Brightness, Volume — edit mode adjusts slider
+    FTYPE_DROPDOWN   // Preset — edit mode cycles options
+} focus_type_t;
+
+typedef struct {
+    lv_obj_t     *widget;   // LVGL object to highlight
+    focus_type_t  type;
+    param_card_t *param;    // non-NULL only for FTYPE_PARAM
+    int32_t slider_step;    // step for FTYPE_SLIDER
+} focus_item_t;
+
+// Main screen focusable items (max 6: P1, T, P2, S, MODE, SETTINGS)
+#define MAIN_FOCUS_MAX 6
+static focus_item_t s_main_items[MAIN_FOCUS_MAX];
+static int s_main_count = 0;
+
+// Settings screen focusable items (max 6: BACK, PRESET, BRIGHT, VOL, SOUND, THEME)
+#define SETTINGS_FOCUS_MAX 6
+static focus_item_t s_settings_items[SETTINGS_FOCUS_MAX];
+static int s_settings_count = 0;
+
+static enc_screen_t s_enc_screen = ENC_SCREEN_MAIN;
+static enc_mode_t   s_enc_mode   = ENC_MODE_NAVIGATE;
+static int          s_enc_focus  = -1;  // -1 = no encoder focus (touch only)
+
+// Glow colors
+#define COLOR_FOCUS_NAV    COLOR_BLUE      // Blue border glow (navigate)
+#define COLOR_FOCUS_EDIT   COLOR_GREEN     // Green border glow (edit)
 
 // ============================================================================
 // Helpers
@@ -164,8 +217,239 @@ static void format_ms_value(char *buf, size_t len, float val) {
 }
 
 // ============================================================================
+// Encoder Focus Helpers
+// ============================================================================
+
+static focus_item_t* enc_current_items(void) {
+    return (s_enc_screen == ENC_SCREEN_MAIN) ? s_main_items : s_settings_items;
+}
+
+static int enc_current_count(void) {
+    if (s_enc_screen == ENC_SCREEN_MAIN) {
+        // In MAN mode, S card is hidden — subtract 1
+        // Items order: P1(0) T(1) P2(2) S(3) MODE(4) SETTINGS(5)
+        // In MAN mode: P1(0) T(1) P2(2) MODE(3) SETTINGS(4) = 5 items
+        return g_settings.auto_mode ? s_main_count : (s_main_count - 1);
+    }
+    return s_settings_count;
+}
+
+// Map logical focus index to actual items[] index (skips S card in MAN mode)
+static int enc_logical_to_real(int logical) {
+    if (s_enc_screen == ENC_SCREEN_MAIN && !g_settings.auto_mode) {
+        // In MAN mode: logical 0-2 = P1/T/P2, skip S(3), logical 3 = MODE(4), logical 4 = SETTINGS(5)
+        if (logical >= 3) return logical + 1;
+    }
+    return logical;
+}
+
+static void enc_apply_glow(lv_obj_t *obj, bool focused, bool editing) {
+    if (!obj) return;
+    if (!focused) {
+        // Restore default: thin accent border, no shadow
+        lv_obj_set_style_border_color(obj, COLOR_ACCENT, 0);
+        lv_obj_set_style_border_width(obj, 1, 0);
+        lv_obj_set_style_shadow_width(obj, 0, 0);
+        lv_obj_set_style_shadow_opa(obj, LV_OPA_TRANSP, 0);
+    } else if (editing) {
+        // Green glow — edit mode
+        lv_obj_set_style_border_color(obj, COLOR_FOCUS_EDIT, 0);
+        lv_obj_set_style_border_width(obj, 3, 0);
+        lv_obj_set_style_shadow_width(obj, 12, 0);
+        lv_obj_set_style_shadow_color(obj, COLOR_FOCUS_EDIT, 0);
+        lv_obj_set_style_shadow_opa(obj, LV_OPA_60, 0);
+        lv_obj_set_style_shadow_spread(obj, 2, 0);
+    } else {
+        // Blue glow — navigate mode
+        lv_obj_set_style_border_color(obj, COLOR_FOCUS_NAV, 0);
+        lv_obj_set_style_border_width(obj, 2, 0);
+        lv_obj_set_style_shadow_width(obj, 8, 0);
+        lv_obj_set_style_shadow_color(obj, COLOR_FOCUS_NAV, 0);
+        lv_obj_set_style_shadow_opa(obj, LV_OPA_40, 0);
+        lv_obj_set_style_shadow_spread(obj, 1, 0);
+    }
+}
+
+static void enc_clear_all_glow(void) {
+    focus_item_t *items = enc_current_items();
+    int count = (s_enc_screen == ENC_SCREEN_MAIN) ? s_main_count : s_settings_count;
+    for (int i = 0; i < count; i++) {
+        enc_apply_glow(items[i].widget, false, false);
+    }
+}
+
+static void enc_update_focus_visual(void) {
+    enc_clear_all_glow();
+    if (s_enc_focus < 0) return;
+    int real = enc_logical_to_real(s_enc_focus);
+    focus_item_t *items = enc_current_items();
+    bool editing = (s_enc_mode == ENC_MODE_EDIT);
+    enc_apply_glow(items[real].widget, true, editing);
+}
+
+static void enc_set_focus(int index) {
+    int max = enc_current_count();
+    if (max <= 0) return;
+    s_enc_focus = ((index % max) + max) % max;  // wrap around
+    enc_update_focus_visual();
+}
+
+// Update a param card's displayed value from its value_ptr
+static void enc_refresh_param_label(param_card_t *p) {
+    if (!p || !p->label_value) return;
+    char buf[16];
+    if (p->unit[0] == 's') {
+        snprintf(buf, sizeof(buf), "%.1f%s", *p->value_ptr, p->unit);
+    } else {
+        format_ms_value(buf, sizeof(buf), *p->value_ptr);
+    }
+    lv_label_set_text(p->label_value, buf);
+}
+
+// ============================================================================
+// Encoder Event Handler
+// ============================================================================
+
+// Forward declaration — defined in Main Dashboard section below
+static void btn_mode_toggle_cb(lv_event_t *e);
+
+static void enc_handle_event(encoder_event_t evt) {
+    // First rotation activates encoder focus if not yet active
+    if (s_enc_focus < 0) {
+        if (evt == ENC_EVENT_CW || evt == ENC_EVENT_CCW) {
+            s_enc_mode = ENC_MODE_NAVIGATE;
+            enc_set_focus(0);
+            audio_play_beep();
+            return;
+        }
+        return;  // Ignore KEY press when no focus
+    }
+
+    int real = enc_logical_to_real(s_enc_focus);
+    focus_item_t *items = enc_current_items();
+    focus_item_t *fi = &items[real];
+
+    if (s_enc_mode == ENC_MODE_NAVIGATE) {
+        // ── NAVIGATE mode ──
+        if (evt == ENC_EVENT_CW) {
+            enc_set_focus(s_enc_focus + 1);
+            audio_play_beep();
+        } else if (evt == ENC_EVENT_CCW) {
+            enc_set_focus(s_enc_focus - 1);
+            audio_play_beep();
+        } else if (evt == ENC_EVENT_PRESS) {
+            switch (fi->type) {
+                case FTYPE_PARAM:
+                case FTYPE_SLIDER:
+                case FTYPE_DROPDOWN:
+                    // Enter edit mode
+                    s_enc_mode = ENC_MODE_EDIT;
+                    enc_update_focus_visual();
+                    break;
+
+                case FTYPE_TOGGLE:
+                    // Toggle immediately
+                    if (fi->widget == lbl_mode) {
+                        btn_mode_toggle_cb(NULL);
+                        // Mode changed — rebuild focus index
+                        // After toggle, MODE is at different logical index
+                        // Keep focus on MODE: in AUTO it's 4, in MAN it's 3
+                        int new_mode_idx = g_settings.auto_mode ? 4 : 3;
+                        enc_set_focus(new_mode_idx);
+                    } else if (fi->widget == sw_sound_global) {
+                        if (lv_obj_has_state(sw_sound_global, LV_STATE_CHECKED)) {
+                            lv_obj_clear_state(sw_sound_global, LV_STATE_CHECKED);
+                        } else {
+                            lv_obj_add_state(sw_sound_global, LV_STATE_CHECKED);
+                        }
+                        // Trigger the callback
+                        lv_obj_send_event(sw_sound_global, LV_EVENT_VALUE_CHANGED, NULL);
+                    } else if (fi->widget == sw_theme_global) {
+                        if (lv_obj_has_state(sw_theme_global, LV_STATE_CHECKED)) {
+                            lv_obj_clear_state(sw_theme_global, LV_STATE_CHECKED);
+                        } else {
+                            lv_obj_add_state(sw_theme_global, LV_STATE_CHECKED);
+                        }
+                        lv_obj_send_event(sw_theme_global, LV_EVENT_VALUE_CHANGED, NULL);
+                    }
+                    audio_play_beep();
+                    break;
+
+                case FTYPE_ACTION:
+                    // Execute action
+                    if (fi->widget == s_btn_settings) {
+                        audio_play_beep();
+                        lv_scr_load_anim(scr_settings, LV_SCR_LOAD_ANIM_MOVE_LEFT, 200, 0, false);
+                        s_enc_screen = ENC_SCREEN_SETTINGS;
+                        s_enc_mode = ENC_MODE_NAVIGATE;
+                        enc_clear_all_glow();
+                        enc_set_focus(0);
+                    } else if (fi->widget == s_btn_back) {
+                        audio_play_beep();
+                        lv_scr_load_anim(scr_main, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 200, 0, false);
+                        s_enc_screen = ENC_SCREEN_MAIN;
+                        s_enc_mode = ENC_MODE_NAVIGATE;
+                        enc_clear_all_glow();
+                        enc_set_focus(0);
+                    }
+                    break;
+            }
+        }
+    } else {
+        // ── EDIT mode ──
+        if (evt == ENC_EVENT_PRESS) {
+            // Confirm — save and return to navigate
+            s_enc_mode = ENC_MODE_NAVIGATE;
+            settings_save();
+            enc_update_focus_visual();
+            audio_play_beep();
+        } else if (evt == ENC_EVENT_CW || evt == ENC_EVENT_CCW) {
+            int dir = (evt == ENC_EVENT_CW) ? 1 : -1;
+
+            switch (fi->type) {
+                case FTYPE_PARAM: {
+                    param_card_t *p = fi->param;
+                    if (!p) break;
+                    *p->value_ptr += dir * p->step;
+                    if (*p->value_ptr > p->max_val) *p->value_ptr = p->max_val;
+                    if (*p->value_ptr < p->min_val) *p->value_ptr = p->min_val;
+                    enc_refresh_param_label(p);
+                    audio_play_beep();
+                    break;
+                }
+                case FTYPE_SLIDER: {
+                    lv_obj_t *slider = fi->widget;
+                    int32_t val = lv_slider_get_value(slider) + dir * fi->slider_step;
+                    int32_t mn = lv_slider_get_min_value(slider);
+                    int32_t mx = lv_slider_get_max_value(slider);
+                    if (val < mn) val = mn;
+                    if (val > mx) val = mx;
+                    lv_slider_set_value(slider, val, LV_ANIM_ON);
+                    lv_obj_send_event(slider, LV_EVENT_VALUE_CHANGED, NULL);
+                    break;
+                }
+                case FTYPE_DROPDOWN: {
+                    lv_obj_t *dd = fi->widget;
+                    int32_t sel = (int32_t)lv_dropdown_get_selected(dd);
+                    int32_t cnt = (int32_t)lv_dropdown_get_option_count(dd);
+                    sel += dir;
+                    if (sel < 0) sel = cnt - 1;
+                    if (sel >= cnt) sel = 0;
+                    lv_dropdown_set_selected(dd, (uint16_t)sel);
+                    lv_obj_send_event(dd, LV_EVENT_VALUE_CHANGED, NULL);
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Parameter Card Creation
 // ============================================================================
+
 
 static void param_btn_cb(lv_event_t *e) {
   param_card_t *card = (param_card_t *)lv_event_get_user_data(e);
@@ -462,15 +746,24 @@ static void create_main_screen(void) {
   lv_obj_align(lbl_status, LV_ALIGN_CENTER, 0, 0);
 
   // Settings gear button
-  lv_obj_t *btn_settings = lv_btn_create(bottom_bar);
-  lv_obj_set_size(btn_settings, 40, 32);
-  lv_obj_align(btn_settings, LV_ALIGN_RIGHT_MID, 0, 0);
-  lv_obj_set_style_bg_color(btn_settings, COLOR_ACCENT, 0);
-  lv_obj_set_style_radius(btn_settings, 8, 0);
-  lv_obj_add_event_cb(btn_settings, btn_settings_cb, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *lbl_gear = lv_label_create(btn_settings);
+  s_btn_settings = lv_btn_create(bottom_bar);
+  lv_obj_set_size(s_btn_settings, 40, 32);
+  lv_obj_align(s_btn_settings, LV_ALIGN_RIGHT_MID, 0, 0);
+  lv_obj_set_style_bg_color(s_btn_settings, COLOR_ACCENT, 0);
+  lv_obj_set_style_radius(s_btn_settings, 8, 0);
+  lv_obj_add_event_cb(s_btn_settings, btn_settings_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lbl_gear = lv_label_create(s_btn_settings);
   lv_label_set_text(lbl_gear, LV_SYMBOL_SETTINGS);
   lv_obj_center(lbl_gear);
+
+  // ── Register encoder-focusable items (order = navigation order) ──
+  s_main_count = 0;
+  s_main_items[s_main_count++] = (focus_item_t){ .widget = card_p1.card, .type = FTYPE_PARAM, .param = &card_p1 };
+  s_main_items[s_main_count++] = (focus_item_t){ .widget = card_t.card,  .type = FTYPE_PARAM, .param = &card_t  };
+  s_main_items[s_main_count++] = (focus_item_t){ .widget = card_p2.card, .type = FTYPE_PARAM, .param = &card_p2 };
+  s_main_items[s_main_count++] = (focus_item_t){ .widget = card_s.card,  .type = FTYPE_PARAM, .param = &card_s  }; // Skipped in MAN mode by enc_logical_to_real()
+  s_main_items[s_main_count++] = (focus_item_t){ .widget = lbl_mode,     .type = FTYPE_TOGGLE };
+  s_main_items[s_main_count++] = (focus_item_t){ .widget = s_btn_settings, .type = FTYPE_ACTION };
 }
 
 // ============================================================================
@@ -543,13 +836,13 @@ static void create_settings_screen(void) {
   lv_obj_set_style_pad_all(scr_settings, 10, 0);
 
   // Back button
-  lv_obj_t *btn_back = lv_btn_create(scr_settings);
-  lv_obj_set_size(btn_back, 80, 32);
-  lv_obj_set_pos(btn_back, 0, 0);
-  lv_obj_set_style_bg_color(btn_back, COLOR_ACCENT, 0);
-  lv_obj_set_style_radius(btn_back, 8, 0);
-  lv_obj_add_event_cb(btn_back, btn_back_cb, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *lbl_back = lv_label_create(btn_back);
+  s_btn_back = lv_btn_create(scr_settings);
+  lv_obj_set_size(s_btn_back, 80, 32);
+  lv_obj_set_pos(s_btn_back, 0, 0);
+  lv_obj_set_style_bg_color(s_btn_back, COLOR_ACCENT, 0);
+  lv_obj_set_style_radius(s_btn_back, 8, 0);
+  lv_obj_add_event_cb(s_btn_back, btn_back_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lbl_back = lv_label_create(s_btn_back);
   lv_label_set_text(lbl_back, LV_SYMBOL_LEFT " Back");
   lv_obj_center(lbl_back);
 
@@ -578,12 +871,12 @@ static void create_settings_screen(void) {
     strcat(preset_opts, g_settings.presets[i].name);
   }
 
-  lv_obj_t *dd_preset = lv_dropdown_create(scr_settings);
-  lv_dropdown_set_options(dd_preset, preset_opts);
-  lv_dropdown_set_selected(dd_preset, g_settings.active_preset);
-  lv_obj_set_size(dd_preset, 280, 36);
-  lv_obj_set_pos(dd_preset, 180, row_y);
-  lv_obj_add_event_cb(dd_preset, preset_dropdown_cb, LV_EVENT_VALUE_CHANGED,
+  s_dd_preset = lv_dropdown_create(scr_settings);
+  lv_dropdown_set_options(s_dd_preset, preset_opts);
+  lv_dropdown_set_selected(s_dd_preset, g_settings.active_preset);
+  lv_obj_set_size(s_dd_preset, 280, 36);
+  lv_obj_set_pos(s_dd_preset, 180, row_y);
+  lv_obj_add_event_cb(s_dd_preset, preset_dropdown_cb, LV_EVENT_VALUE_CHANGED,
                       NULL);
   row_y += row_h + 5;
 
@@ -661,6 +954,15 @@ static void create_settings_screen(void) {
   lv_obj_set_style_text_color(lbl_ver, COLOR_TEXT_DIM, 0);
   lv_obj_set_style_text_font(lbl_ver, &lv_font_montserrat_14, 0);
   lv_obj_align(lbl_ver, LV_ALIGN_BOTTOM_MID, 0, -5);
+
+  // ── Register encoder-focusable items (order = navigation order) ──
+  s_settings_count = 0;
+  s_settings_items[s_settings_count++] = (focus_item_t){ .widget = s_btn_back,       .type = FTYPE_ACTION };
+  s_settings_items[s_settings_count++] = (focus_item_t){ .widget = s_dd_preset,      .type = FTYPE_DROPDOWN };
+  s_settings_items[s_settings_count++] = (focus_item_t){ .widget = slider_brightness, .type = FTYPE_SLIDER, .slider_step = 5 };
+  s_settings_items[s_settings_count++] = (focus_item_t){ .widget = slider_volume,     .type = FTYPE_SLIDER, .slider_step = 5 };
+  s_settings_items[s_settings_count++] = (focus_item_t){ .widget = sw_sound_global,   .type = FTYPE_TOGGLE };
+  s_settings_items[s_settings_count++] = (focus_item_t){ .widget = sw_theme_global,   .type = FTYPE_TOGGLE };
 }
 
 // ============================================================================
@@ -1002,6 +1304,12 @@ void ui_task(void *pvParameters) {
       }
     }
     // ── End queue drain ─────────────────────────────────────────────────────
+
+    // ── Poll rotary encoder ────────────────────────────────────────────────
+    encoder_event_t enc_evt;
+    while (encoder_poll(&enc_evt)) {
+        enc_handle_event(enc_evt);
+    }
 
     // ── BLE connected icon: show/hide based on live connection state ───────
     if (lbl_ble_icon) {
