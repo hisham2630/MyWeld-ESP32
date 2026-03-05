@@ -67,6 +67,10 @@ static bool s_man_fired = false;
 static int64_t s_cooldown_start_us = 0;
 static bool s_charger_holdoff = false;
 
+// Voltage-based charge cutoff (overcharge protection)
+// Charger disabled at SUPERCAP_MAX_V, re-enabled at SUPERCAP_FULL_V (hysteresis)
+static bool s_charger_cutoff = false;
+
 // Was caps charged on last check?
 static bool s_was_ready = false;
 
@@ -310,10 +314,16 @@ void welding_task(void *pvParameters)
         if (s_charger_holdoff) {
             int64_t elapsed_us = esp_timer_get_time() - s_cooldown_start_us;
             if (elapsed_us >= (int64_t)POST_PULSE_CHARGE_DELAY_MS * 1000LL) {
-                gpio_set_level(PIN_CHARGER_EN, 0); // Re-enable charger
+                // Only re-enable if voltage-based cutoff is NOT active
+                if (!s_charger_cutoff) {
+                    gpio_set_level(PIN_CHARGER_EN, 0); // Re-enable charger
+                    ESP_LOGI(TAG, "Charger hold-off complete, charger re-enabled");
+                } else {
+                    ESP_LOGI(TAG, "Charger hold-off complete, but cutoff active (%.1fV >= %.1fV)",
+                             cap_v, SUPERCAP_MAX_V);
+                }
                 s_charger_holdoff = false;
                 s_cooldown_start_us = 0;
-                ESP_LOGI(TAG, "Charger hold-off complete, charger re-enabled");
             }
         }
 
@@ -463,6 +473,26 @@ void adc_task(void *pvParameters)
         g_weld_status.protection_voltage = v_prot;
         g_weld_status.contact_voltage = v_contact;
         g_weld_status.contact_detected = (v_contact > CONTACT_THRESHOLD_V);
+
+        // ==============================================
+        // Voltage-based Charge Cutoff (overcharge protection)
+        // Disable charger at SUPERCAP_MAX_V (5.7V)
+        // Re-enable charger at SUPERCAP_FULL_V (5.5V) — hysteresis
+        // ==============================================
+        if (!s_charger_cutoff && v_cap >= SUPERCAP_MAX_V) {
+            s_charger_cutoff = true;
+            gpio_set_level(PIN_CHARGER_EN, 1); // Disable charger
+            ESP_LOGI(TAG, "CHARGE CUTOFF: %.2fV >= %.1fV — charger disabled",
+                     v_cap, SUPERCAP_MAX_V);
+        } else if (s_charger_cutoff && v_cap <= SUPERCAP_FULL_V) {
+            s_charger_cutoff = false;
+            // Only re-enable if not in pulse hold-off
+            if (!s_charger_holdoff) {
+                gpio_set_level(PIN_CHARGER_EN, 0); // Re-enable charger
+                ESP_LOGI(TAG, "CHARGE RESUME: %.2fV <= %.1fV — charger enabled",
+                         v_cap, SUPERCAP_FULL_V);
+            }
+        }
 
         // Update UI voltage display (every sample)
         ui_update_voltage(v_cap);
