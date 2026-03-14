@@ -1,0 +1,28 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "settings.c"
+        "welding.c"
+        "audio.c"
+        "display.c"
+        "ui.c"
+        "ble_serial.c"
+        "ota.c"
+        "encoder.c"
+        "esp_lcd_axs15231b.c"
+        "esp_lcd_touch.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        driver
+        esp_adc
+        nvs_flash
+        esp_timer
+        freertos
+        esp_event
+        bt
+        esp_lcd
+        app_update
+        mbedtls
+        esp_partition
+)

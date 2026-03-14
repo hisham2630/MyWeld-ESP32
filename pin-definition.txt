@@ -1,0 +1,17 @@
+// P2 8-Pin Header (JC3248W535)
+// ─────────────────────────────────────────────────────────────
+// Pin 1:  PIN_VOLTAGE     GPIO_NUM_5   // Input  — Supercap voltage ADC1_CH4
+// Pin 2:  PIN_PROTECTION  GPIO_NUM_6   // Input  — Gate drive rail ADC1_CH5
+// Pin 3:  PIN_CONTACT     GPIO_NUM_7   // Input  — Electrode contact detect ADC1_CH6
+// Pin 4:  PIN_ENC_S1      GPIO_NUM_15  // Input  — Encoder CLK quadrature A  ← Encoder
+// Pin 5:  PIN_CHARGER_EN  GPIO_NUM_16  // Output — Supercap charger KEY control
+// Pin 6:  PIN_OUTPUT      GPIO_NUM_46  // Output — MOSFET bank fire signal
+// Pin 7:  PIN_SPARE_1     GPIO_NUM_9   // Free   — Reserved for temp sensor ADC1_CH8
+// Pin 8:  PIN_START       GPIO_NUM_14  // Input  — External weld button, MAN mode
+
+// P3/P4 4-Pin Header (JC3248W535) — duplicated headers, same pins
+// ─────────────────────────────────────────────────────────────
+// Pin 1:  GND                          //        — Ground
+// Pin 2:  3V3                          //        — 3.3V power
+// Pin 3:  PIN_ENC_S2      GPIO_NUM_17  // Input  — Encoder DT quadrature B   ← Encoder
+// Pin 4:  PIN_ENC_KEY     GPIO_NUM_18  // Input  — Encoder push button, LOW  ← Encoder
