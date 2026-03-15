@@ -339,7 +339,9 @@ static int params_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         float new_s  = p->s_x10  / 10.0f;
 
         // Validate ranges — P1 is always required
-        if (new_p1 < PULSE_MIN_MS || new_p1 > PULSE_MAX_MS) {
+        // Use HW floor (1ms), not UI slider min (5ms), because presets
+        // can store values like 3ms for thin materials.
+        if (new_p1 < PULSE_HW_MIN_MS || new_p1 > PULSE_MAX_MS) {
             ESP_LOGW(TAG, "P1 out of range: %.1f", new_p1);
             send_nak(BLE_MSG_PARAMS_WRITE, BLE_ERR_INVALID_RANGE);
             return 0;
@@ -351,15 +353,15 @@ static int params_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             return 0;
         }
         // P2/P3/P4 can be 0 (disabled) or PULSE_MIN..PULSE_MAX
-        if (new_p2 != 0.0f && (new_p2 < PULSE_MIN_MS || new_p2 > PULSE_MAX_MS)) {
+        if (new_p2 != 0.0f && (new_p2 < PULSE_HW_MIN_MS || new_p2 > PULSE_MAX_MS)) {
             send_nak(BLE_MSG_PARAMS_WRITE, BLE_ERR_INVALID_RANGE);
             return 0;
         }
-        if (new_p3 != 0.0f && (new_p3 < PULSE_MIN_MS || new_p3 > PULSE_MAX_MS)) {
+        if (new_p3 != 0.0f && (new_p3 < PULSE_HW_MIN_MS || new_p3 > PULSE_MAX_MS)) {
             send_nak(BLE_MSG_PARAMS_WRITE, BLE_ERR_INVALID_RANGE);
             return 0;
         }
-        if (new_p4 != 0.0f && (new_p4 < PULSE_MIN_MS || new_p4 > PULSE_MAX_MS)) {
+        if (new_p4 != 0.0f && (new_p4 < PULSE_HW_MIN_MS || new_p4 > PULSE_MAX_MS)) {
             send_nak(BLE_MSG_PARAMS_WRITE, BLE_ERR_INVALID_RANGE);
             return 0;
         }
@@ -677,10 +679,10 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             if (t > PAUSE_MAX_MS) t = PAUSE_MAX_MS;
 
             // Validate pulse ranges
-            if (p1 < PULSE_MIN_MS || p1 > PULSE_MAX_MS ||
-                p2 < PULSE_MIN_MS || p2 > PULSE_MAX_MS ||
-                (p3 != 0.0f && (p3 < PULSE_MIN_MS || p3 > PULSE_MAX_MS)) ||
-                (p4 != 0.0f && (p4 < PULSE_MIN_MS || p4 > PULSE_MAX_MS))) {
+            if (p1 < PULSE_HW_MIN_MS || p1 > PULSE_MAX_MS ||
+                p2 < PULSE_HW_MIN_MS || p2 > PULSE_MAX_MS ||
+                (p3 != 0.0f && (p3 < PULSE_HW_MIN_MS || p3 > PULSE_MAX_MS)) ||
+                (p4 != 0.0f && (p4 < PULSE_HW_MIN_MS || p4 > PULSE_MAX_MS))) {
                 send_nak(BLE_MSG_CMD, BLE_ERR_INVALID_RANGE);
                 return 0;
             }

@@ -24,6 +24,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "ota.h"
 #include "settings.h"
 #include "welding.h"
 #include <stdio.h>
@@ -1471,9 +1472,17 @@ void ui_task(void *pvParameters) {
     // ── End queue drain ─────────────────────────────────────────────────────
 
     // ── Poll rotary encoder ────────────────────────────────────────────────
+    // During OTA firmware updates, drain encoder events without processing
+    // to prevent: screen navigation (breaks OTA overlay), parameter edits
+    // (NVS flash writes contending with OTA flash writes), and mode toggles.
     encoder_event_t enc_evt;
-    while (encoder_poll(&enc_evt)) {
-        enc_handle_event(enc_evt);
+    if (ota_is_active()) {
+        // Drain stale events so they don't fire after OTA completes
+        while (encoder_poll(&enc_evt)) { /* discard */ }
+    } else {
+        while (encoder_poll(&enc_evt)) {
+            enc_handle_event(enc_evt);
+        }
     }
 
     // ── BLE connected icon: show/hide based on live connection state ───────

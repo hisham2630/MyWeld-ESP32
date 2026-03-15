@@ -104,7 +104,8 @@
 // ============================================================================
 // Pulse Parameters (4-pulse system: P1 → T → P2 → T → P3 → T → P4)
 // ============================================================================
-#define PULSE_MIN_MS         5.0f     // Minimum pulse duration (ms)
+#define PULSE_HW_MIN_MS      1.0f     // Absolute hardware floor (BLE validation)
+#define PULSE_MIN_MS         5.0f     // UI slider minimum (ms)
 #define PULSE_MAX_MS         50.0f    // Maximum pulse duration (ms)
 #define PULSE_STEP_MS        5.0f     // Step size for pulse adjustment
 #define PULSE_OFF_VALUE      0.0f     // Special "disabled" value for P2/P3/P4
