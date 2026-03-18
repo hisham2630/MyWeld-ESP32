@@ -115,5 +115,14 @@ void ui_show_ota_progress(uint8_t percent);
  */
 void ui_hide_ota_progress(void);
 
+// ============================================================================
+// Non-LVGL stub helpers (called by lcd_update_task / display driver)
+// ============================================================================
+#if !HAS_LVGL
+/** Push cached UI values to the display HAL. Called from lcd_update_task. */
+void ui_stub_refresh_display(void);
+/** Returns true if any UI value has changed since last refresh. */
+bool ui_stub_is_dirty(void);
+#endif
 
 #endif // UI_H

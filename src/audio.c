@@ -1,3 +1,7 @@
+#include "board_config.h"
+
+#if (AUDIO_TYPE == AUDIO_I2S)
+
 /**
  * I2S Audio Module — Sine Wave Tone Generator
  * 
@@ -249,3 +253,5 @@ uint8_t audio_get_volume(void)
 {
     return s_volume;
 }
+
+#endif // AUDIO_TYPE == AUDIO_I2S

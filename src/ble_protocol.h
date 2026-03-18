@@ -63,7 +63,7 @@
 #define BLE_CMD_SAVE_PRESET         0x02    // [index, name[20], p1, t, p2, p3, p4] = 32b
 #define BLE_CMD_FACTORY_RESET       0x03    // (no extra data)
 #define BLE_CMD_RESET_WELD_COUNTER  0x04    // [target: 0=session, 1=total, 2=both]
-#define BLE_CMD_CALIBRATE_ADC       0x05    // [channel, reference_mv_u16]
+#define BLE_CMD_CALIBRATE_ADC       0x05    // [channel, ref_mv_u16] ch0=supercap, ch1=protection, ch2=max_supercap_voltage
 #define BLE_CMD_AUTH                0x06    // [pin: ASCII 4 digits + null = 5 bytes]
 #define BLE_CMD_CHANGE_PIN          0x07    // [new_pin: ASCII 4 digits + null = 5 bytes]
 #define BLE_CMD_REBOOT              0x08    // (no extra data) — reboot device
@@ -135,9 +135,10 @@ typedef struct __attribute__((packed)) {
     uint16_t raw_protection_mv; // Uncalibrated protection voltage (mV)
     uint16_t cal_factor_v_x1000; // Supercap cal factor × 1000 (1000 = 1.0)
     uint16_t cal_factor_p_x1000; // Protection cal factor × 1000 (1000 = 1.0)
-} ble_status_packet_t;          // Total: 44 bytes
+    uint16_t max_supercap_mv;    // Configured max supercap voltage in mV
+} ble_status_packet_t;          // Total: 46 bytes
 
-_Static_assert(sizeof(ble_status_packet_t) == 44, "STATUS packet must be 44 bytes");
+_Static_assert(sizeof(ble_status_packet_t) == 46, "STATUS packet must be 46 bytes");
 
 /**
  * PARAMS_WRITE payload (BLE_MSG_PARAMS_WRITE) — 33 bytes.

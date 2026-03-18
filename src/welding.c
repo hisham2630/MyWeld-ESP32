@@ -328,9 +328,9 @@ void welding_task(void *pvParameters)
 
         // Check supercap voltage
         float cap_v = g_weld_status.supercap_voltage;
-        g_weld_status.low_voltage_warn = (cap_v < LOW_VOLTAGE_WARN && cap_v > 0.1f);
+        g_weld_status.low_voltage_warn = (cap_v < settings_get_low_warn() && cap_v > 0.1f);
 
-        if (cap_v < LOW_VOLTAGE_BLOCK && cap_v > 0.1f) {
+        if (cap_v < settings_get_low_block() && cap_v > 0.1f) {
             if (s_low_v_start_us == 0) {
                 s_low_v_start_us = esp_timer_get_time();
             } else if ((esp_timer_get_time() - s_low_v_start_us) > (LOW_V_CONFIRM_MS * 1000LL)) {
@@ -339,7 +339,7 @@ void welding_task(void *pvParameters)
                     g_weld_state = WELD_STATE_BLOCKED;
                     ui_update_weld_state(WELD_STATE_BLOCKED);
                     audio_play_error();
-                    ESP_LOGW(TAG, "LOW VOLTAGE: %.1fV < %.1fV", cap_v, LOW_VOLTAGE_BLOCK);
+                    ESP_LOGW(TAG, "LOW VOLTAGE: %.1fV < %.1fV", cap_v, settings_get_low_block());
                 }
             }
         } else {
@@ -355,11 +355,11 @@ void welding_task(void *pvParameters)
         }
 
         // "Ready" notification when caps fully charged
-        if (cap_v >= SUPERCAP_FULL_V && !s_was_ready) {
+        if (cap_v >= settings_get_full_voltage() && !s_was_ready) {
             s_was_ready = true;
             audio_play_ready();
             ESP_LOGI(TAG, "Supercaps fully charged: %.1fV", cap_v);
-        } else if (cap_v < SUPERCAP_FULL_V - 0.5f) {
+        } else if (cap_v < settings_get_full_voltage() - 0.5f) {
             s_was_ready = false; // Hysteresis
         }
 
@@ -377,7 +377,7 @@ void welding_task(void *pvParameters)
                     ESP_LOGI(TAG, "Charger hold-off complete, charger re-enabled");
                 } else {
                     ESP_LOGI(TAG, "Charger hold-off complete, but cutoff active (%.1fV >= %.1fV)",
-                             cap_v, SUPERCAP_MAX_V);
+                             cap_v, settings_get_max_voltage());
                 }
                 s_charger_holdoff = false;
                 s_cooldown_start_us = 0;
@@ -548,25 +548,23 @@ void adc_task(void *pvParameters)
         g_weld_status.supercap_voltage = v_cap;
         g_weld_status.protection_voltage = v_prot;
         g_weld_status.contact_voltage = v_contact;
-        g_weld_status.contact_detected = (v_contact > CONTACT_THRESHOLD_V);
+        g_weld_status.contact_detected = (v_contact > settings_get_contact_threshold());
 
+        // Disable charger at max voltage
+        // Re-enable charger at full voltage (hysteresis)
         // ==============================================
-        // Voltage-based Charge Cutoff (overcharge protection)
-        // Disable charger at SUPERCAP_MAX_V (5.7V)
-        // Re-enable charger at SUPERCAP_FULL_V (5.5V) — hysteresis
-        // ==============================================
-        if (!s_charger_cutoff && v_cap >= SUPERCAP_MAX_V) {
+        if (!s_charger_cutoff && v_cap >= settings_get_max_voltage()) {
             s_charger_cutoff = true;
             gpio_set_level(PIN_CHARGER_EN, 1); // Disable charger
             ESP_LOGI(TAG, "CHARGE CUTOFF: %.2fV >= %.1fV — charger disabled",
-                     v_cap, SUPERCAP_MAX_V);
-        } else if (s_charger_cutoff && v_cap <= SUPERCAP_FULL_V) {
+                     v_cap, settings_get_max_voltage());
+        } else if (s_charger_cutoff && v_cap <= settings_get_full_voltage()) {
             s_charger_cutoff = false;
             // Only re-enable if not in pulse hold-off
             if (!s_charger_holdoff) {
                 gpio_set_level(PIN_CHARGER_EN, 0); // Re-enable charger
                 ESP_LOGI(TAG, "CHARGE RESUME: %.2fV <= %.1fV — charger enabled",
-                         v_cap, SUPERCAP_FULL_V);
+                         v_cap, settings_get_full_voltage());
             }
         }
 

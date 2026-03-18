@@ -2,11 +2,11 @@
  * MyWeld ESP32-S3 — Main Entry Point
  *
  * Supercap Spot Welder Controller
- * Board: JC3248W535 (Guition ESP32-S3, 480×320 TFT)
+ * Multi-variant build: see board_config.h for active variant.
  *
  * Architecture:
- *   Core 0: LVGL UI rendering + BLE serial
- *   Core 1: Welding logic + ADC sampling + I2S audio
+ *   Core 0: Display UI rendering + BLE serial
+ *   Core 1: Welding logic + ADC sampling + audio
  *
  * Safety: OUTPUT_PIN and CHARGER_EN are set to safe defaults
  *         BEFORE any other initialization.
@@ -21,15 +21,14 @@
 #include <stdio.h>
 #include <string.h>
 
-
-#include "audio.h"
+#include "board_config.h"
+#include "audio_hal.h"
 #include "ble_serial.h"
 #include "config.h"
-#include "display.h"
+#include "display_hal.h"
 #include "encoder.h"
 #include "ota.h"
 #include "settings.h"
-#include "ui.h"
 #include "welding.h"
 
 
@@ -100,7 +99,7 @@ static void print_banner(void) {
   printf("\n");
   printf("╔══════════════════════════════════════════╗\n");
   printf("║  ⚡ MyWeld ESP32-S3 Spot Welder v%s  ║\n", FW_VERSION_STRING);
-  printf("║  Board: JC3248W535 (Guition)             ║\n");
+  printf("║  Board: %-33s║\n", BOARD_NAME_STRING);
   printf("║  Built: %s %s              ║\n", FW_BUILD_DATE, FW_BUILD_TIME);
   printf("╚══════════════════════════════════════════╝\n");
   printf("\n");
@@ -136,19 +135,22 @@ void app_main(void) {
   // PHASE 3: Peripheral initialization
   // ========================================
 
+#if HAS_LVGL
   // Silence IDF's internal lcd_panel.io.i2c error logger.
   // The AXS15231B touch controller does not ACK I2C when idle (no finger),
   // causing the IDF driver to log ESP_LOGE before returning the error to us.
-  // We already handle the error silently in touch_axs15231b_read_data(),
-  // but we can't suppress the IDF's own log from our wrapper — so we do it
-  // here.
   esp_log_level_set("lcd_panel.io.i2c", ESP_LOG_NONE);
+#endif
 
-  // Initialize I2S audio (speaker on P6)
+  // Initialize audio (I2S or buzzer depending on variant)
   audio_init();
 
-  // Initialize display (QSPI + LVGL)
-  display_init();
+  // Initialize display (variant-specific: QSPI TFT, Nextion, or LCD)
+#if HAS_LVGL
+  display_init();   // QSPI TFT + LVGL init
+#else
+  display_hal_init();  // Nextion UART or I2C LCD init
+#endif
 
   // Initialize rotary encoder (ISR + GPIO)
   encoder_init();
@@ -157,8 +159,10 @@ void app_main(void) {
   // PHASE 4: Application initialization
   // ========================================
 
-  // Build LVGL UI
-  ui_init();
+  // Build UI (variant-specific)
+#if HAS_LVGL
+  ui_init();   // Create LVGL widgets
+#endif
 
   // Initialize welding state machine
   welding_init();
@@ -170,9 +174,14 @@ void app_main(void) {
   // PHASE 5: Start FreeRTOS tasks
   // ========================================
 
+#if HAS_LVGL
   // Core 0: LVGL UI tick + rendering
   xTaskCreatePinnedToCore(ui_task, "ui_task", TASK_UI_STACK_SIZE, NULL,
                           TASK_UI_PRIORITY, NULL, TASK_UI_CORE);
+#else
+  // Core 0: Display update task (Nextion event polling / LCD refresh)
+  display_hal_start_task();
+#endif
 
   // Core 1: ADC voltage sampling
   xTaskCreatePinnedToCore(adc_task, "adc_task", TASK_ADC_STACK_SIZE, NULL,
@@ -182,8 +191,9 @@ void app_main(void) {
   xTaskCreatePinnedToCore(welding_task, "welding_task", TASK_WELDING_STACK_SIZE,
                           NULL, TASK_WELDING_PRIORITY, NULL, TASK_WELDING_CORE);
 
-  // Play startup melody
+  // Play startup sound
   audio_play_startup();
 
   ESP_LOGI(TAG, "All tasks started. MyWeld is ready! ⚡");
 }
+

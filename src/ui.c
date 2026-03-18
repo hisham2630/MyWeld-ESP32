@@ -1,3 +1,7 @@
+#include "board_config.h"
+
+#if HAS_LVGL
+
 /**
  * LVGL UI Module — Full Dashboard & Settings
  *
@@ -203,11 +207,11 @@ static inline bool is_user_defined(void) {
 }
 
 static lv_color_t get_voltage_color(float v) {
-  if (v >= SUPERCAP_FULL_V)
+  if (v >= settings_get_full_voltage())
     return COLOR_GREEN;
-  if (v >= LOW_VOLTAGE_WARN)
+  if (v >= settings_get_low_warn())
     return COLOR_YELLOW;
-  if (v >= LOW_VOLTAGE_BLOCK)
+  if (v >= settings_get_low_block())
     return COLOR_RED;
   return lv_color_hex(0x660000);
 }
@@ -1210,7 +1214,7 @@ void ui_task(void *pvParameters) {
         case UI_MSG_VOLTAGE: {
           if (!lbl_voltage || !bar_voltage) break;
           float voltage = msg.voltage;
-          float pct = (voltage / SUPERCAP_MAX_V) * 100.0f;
+          float pct = (voltage / settings_get_max_voltage()) * 100.0f;
           if (pct < 0)   pct = 0;
           if (pct > 100) pct = 100;
           lv_label_set_text_fmt(lbl_voltage, "%.1fV", voltage);
@@ -1621,3 +1625,5 @@ void ui_show_notification(const char *message, uint16_t duration_ms) {
   }
   ESP_LOGI(TAG, "Notification: %s", message);
 }
+
+#endif // HAS_LVGL

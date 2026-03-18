@@ -123,9 +123,9 @@ Adapt the MyWeld V2.0 PRO Arduino Nano spot welder code to run on the **JC3248W5
 | **OUTPUT_PIN** (MOSFET fire) | **IO46** | P2 pin 6 | Digital OUT | No | Pure digital, no ADC conflict |
 | **CHARGER_EN** | **IO16** | P2 pin 5 | Digital OUT | — | KEY pin control via 2N2222 |
 | **START_PIN** (Weld button) | **IO14** | P2 pin 8 | INPUT_PULLUP | — | External physical weld trigger |
-| **VOLTAGE_PIN** (Supercap V) | **IO5** | P2 pin 1 | ADC Input | ADC1_CH4 ✓ | Via 10k/15k divider |
-| **PROTECTION_PIN** (13.5V) | **IO6** | P2 pin 2 | ADC Input | ADC1_CH5 ✓ | Via 47k/15k divider |
-| **CONTACT_PIN** (Auto mode) | **IO7** | P2 pin 3 | ADC Input | ADC1_CH6 ✓ | 10kΩ pull-up + 100kΩ isolation |
+| **VOLTAGE_PIN** (Supercap V) | **IO5** | P2 pin 1 | ADC Input | ADC1_CH4 ✓ | Via 33k/10k divider (supports 4.0–12.0V) |
+| **PROTECTION_PIN** (13.5V) | **IO6** | P2 pin 2 | ADC Input | ADC1_CH5 ✓ | Via 100k/15k divider |
+| **CONTACT_PIN** (Auto mode) | **IO7** | P2 pin 3 | ADC Input | ADC1_CH6 ✓ | Via 18k/4.7k divider |
 | **SPEAKER** (I2S audio) | **IO2/42/41** | Built-in | I2S Output | — | Built-in amp → P6 speaker |
 | *Spare* | **IO15** | P2 pin 4 | — | ADC2_CH4 | Available for future use |
 | *Spare* | **IO9** | P2 pin 7 | — | ADC1_CH8 | Available for future use |
@@ -140,9 +140,9 @@ Adapt the MyWeld V2.0 PRO Arduino Nano spot welder code to run on the **JC3248W5
 
 | Measurement | Range | Divider | ADC Voltage | Multiplier |
 |-------------|-------|---------|-------------|------------|
-| Supercap (0–5.7V) | 10k/15k | 0–2.28V | Safe ✓ | `V = ADC_raw × (3.3/4095) × (25/15)` |
-| Protection (0–13.5V) | 47k/15k | 0–3.26V | Safe ✓ | `V = ADC_raw × (3.3/4095) × (62/15)` |
-| Contact detect | 10kΩ pull-up | 0–3.3V | Safe ✓ | Threshold ~1.5V |
+| Supercap (4.0–12.0V) | 33k/10k | 0–2.79V @12V | Safe ✓ | `V = ADC_raw × (3.3/4095) × 4.3` |
+| Protection (0–13.5V) | 100k/15k | 0–1.76V | Safe ✓ | `V = ADC_raw × (3.3/4095) × 7.667` |
+| Contact detect | 18k/4.7k | 0–1.5V @12V | Safe ✓ | Dynamic threshold (50% of expected) |
 
 ---
 
@@ -155,7 +155,7 @@ Adapt the MyWeld V2.0 PRO Arduino Nano spot welder code to run on the **JC3248W5
     │
     ├──→ [3A Buck Module] ──→  5.0V ──→ ESP32-S3 via P1 +5VIN (ALWAYS ON)
     │
-    └──→ [10A CC/CV Buck-Boost] ──→ 5.5V/5A ──→ [30SQ060 Schottky] ──→ Supercaps (2S2P, 3.0V×2=6.0V, limit 5.7V)
+    └──→ [10A CC/CV Buck-Boost] ──→ Configurable V (4.0–12.0V) ──→ [30SQ060 Schottky] ──→ Supercaps (bank config varies)
                 │                                                             │
                KEY pin ←── 2N2222 collector                                   │
                              │ base ← [1kΩ] ← IO16 (CHARGER_EN)              ↓
@@ -223,17 +223,22 @@ MyWeld-ESP32/
 #define ADC_VREF        3.3f
 
 // Voltage divider multipliers
-#define SUPERCAP_V_MULT     (25.0f / 15.0f)   // 10k+15k divider
-#define PROTECTION_V_MULT   (62.0f / 15.0f)   // 47k+15k divider
+#define SUPERCAP_V_MULT     4.3f          // 33k+10k divider
+#define PROTECTION_V_MULT   7.667f        // 100k+15k divider
 
-// Supercap Battery (2S2P, 3.0V 3000F each)
-#define SUPERCAP_MAX_V          5.7f   // Max charge voltage (2×3.0V = 6.0V, derate to 5.7V)
-#define SUPERCAP_FULL_V         5.5f   // Considered "fully charged" for UI
-#define LOW_VOLTAGE_THRESHOLD   4.0f   // Low voltage warning (V)
-#define CRITICAL_VOLTAGE        3.0f   // Refuse to weld below this (V)
+// Supercap Bank (configurable)
+#define SUPERCAP_V_DEFAULT      5.7f   // Default max charge voltage
+#define SUPERCAP_V_MIN          4.0f   // Configurable range minimum
+#define SUPERCAP_V_MAX          12.0f  // Configurable range maximum
+#define SUPERCAP_V_STEP         0.01f  // Adjustment precision
+// Derived thresholds (from max_supercap_voltage at runtime):
+//   Full    = max - 0.2V
+//   Warning = max × 70%
+//   Block   = max × 50%
+//   Contact = dynamic (based on divider ratio)
 
 // Protection thresholds
-#define CONTACT_THRESHOLD       1.5f   // Contact detection (V)
+// Contact threshold is dynamically calculated from max_supercap_voltage
 #define PROTECTION_LOW          10.0f  // Gate drive rail min (V)
 #define PROTECTION_HIGH         18.0f  // Gate drive rail max (V)
 
@@ -252,12 +257,12 @@ MyWeld-ESP32/
 #define CHARGER_SETTLE_US       500    // Settle time before/after pulse
 ```
 
-#### 2. `welding.cpp` — Core Logic (Preserved 1:1)
-- `generatePulse()` — P1/T/P2 dual-pulse with CHARGER_EN disconnect
+#### 2. `welding.c` — Core Logic
+- `generatePulse()` — P1/T/P2/P3/P4 multi-pulse with CHARGER_EN disconnect
 - `checkProtectionVoltage()` — 13.5V rail monitoring
-- `checkContactDetection()` — AUTO mode electrode sensing
-- `checkLowVoltage()` — Supercap voltage protection
-- All timing logic identical to original, only pin numbers change
+- `checkContactDetection()` — AUTO mode electrode sensing (dynamic threshold)
+- `checkLowVoltage()` — Supercap voltage protection (configurable threshold)
+- All voltage thresholds use `settings_get_*()` dynamic getters
 
 #### 2b. `audio.cpp` — I2S Audio Feedback (NEW — replaces buzzer)
 - Uses ESP32-S3 I2S peripheral → built-in amplifier → speaker on P6

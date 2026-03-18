@@ -69,7 +69,7 @@ Build a **native Kotlin Android companion app** for the MyWeld ESP32 spot welder
 | Aspect | Old (Text) | New (Binary) |
 |--------|-----------|--------------|
 | **Parsing** | `sscanf("P1=%f")` — fragile | Fixed offsets — robust |
-| **Size** | ~80 bytes per status | ~32 bytes — faster BLE |
+| **Size** | ~80 bytes per status | ~46 bytes — faster BLE |
 | **Error handling** | None (fire-and-forget) | ACK/NAK with error codes |
 | **Extensibility** | Add new field = break parser | Version + type field = safe extension |
 | **Endianness** | N/A | Little-endian (ESP32 native) |
@@ -95,7 +95,7 @@ Build a **native Kotlin Android companion app** for the MyWeld ESP32 spot welder
 
 | Type | Hex | Direction | Payload | Description |
 |------|-----|-----------|---------|-------------|
-| STATUS | `0x01` | ESP→App (notify) | 32 bytes | Periodic status update |
+| STATUS | `0x01` | ESP→App (notify) | 46 bytes | Periodic status update |
 | PARAMS_READ | `0x02` | App→ESP (read) | 0 | Request current parameters |
 | PARAMS_RESPONSE | `0x03` | ESP→App | 28 bytes | Current parameter values |
 | PARAMS_WRITE | `0x04` | App→ESP (write) | 28 bytes | Set new parameters |
@@ -108,30 +108,38 @@ Build a **native Kotlin Android companion app** for the MyWeld ESP32 spot welder
 | PRESET_LIST_RESPONSE | `0x0B` | ESP→App (notify) | varies | Preset names (chunked if needed) |
 | WELD_LOG_ENTRY | `0x0C` | ESP→App (notify) | 12 bytes | Weld log event (timestamp, energy, voltage) |
 
-### STATUS Payload (0x01) — 32 bytes, sent every ~500ms
+### STATUS Payload (0x01) — 46 bytes, sent every ~500ms
 
 ```c
 typedef struct __attribute__((packed)) {
-    uint16_t supercap_mv;       // Supercap voltage in millivolts (0–5700)
+    uint16_t supercap_mv;       // Supercap voltage in millivolts (0–12000)
     uint16_t protection_mv;     // Protection rail in millivolts (0–18000)
-    uint8_t  state;             // Weld state enum (IDLE=0, READY=1, CHARGING=2, FIRING=3, ERROR=4, ...)
+    uint8_t  state;             // Weld state enum (IDLE=0, ARMED=1, PRE_FIRE=2, FIRING_P1=3, ...)
     uint8_t  charge_percent;    // 0–100%
     uint8_t  auto_mode;         // 0=MAN, 1=AUTO
-    uint8_t  active_preset;     // 0–9
+    uint8_t  active_preset;     // 0–19 (0xFF = user-defined)
     uint32_t session_welds;     // Session weld counter
     uint32_t total_welds;       // Lifetime weld counter
-    uint8_t  ble_connected;     // 1 if BLE connected (redundant but useful)
+    uint8_t  ble_connected;     // 1 if BLE connected
     uint8_t  sound_on;          // 0=mute, 1=on
-    uint8_t  theme;             // 0=dark, 1=light (ESP32 display theme)
+    uint8_t  theme;             // 0=dark, 1=light
     uint8_t  error_code;        // 0=none, see error enum
     uint16_t p1_x10;            // P1 in 0.1ms units (e.g., 50 = 5.0ms)
     uint16_t t_x10;             // T in 0.1ms units
     uint16_t p2_x10;            // P2 in 0.1ms units
+    uint16_t p3_x10;            // P3 in 0.1ms units (0 = disabled)
+    uint16_t p4_x10;            // P4 in 0.1ms units (0 = disabled)
     uint16_t s_x10;             // S in 0.1s units (e.g., 5 = 0.5s)
     uint8_t  fw_major;          // Firmware major version
     uint8_t  fw_minor;          // Firmware minor version
-    uint8_t  reserved[2];       // Future use, padding to 32 bytes
-} ble_status_packet_t;          // Total: 32 bytes
+    uint8_t  volume;            // Master volume 0–100%
+    uint8_t  auth_lockout_sec;  // Remaining lockout seconds (0 = no lockout)
+    uint16_t raw_supercap_mv;   // Uncalibrated supercap voltage (mV)
+    uint16_t raw_protection_mv; // Uncalibrated protection voltage (mV)
+    uint16_t cal_factor_v_x1000; // Supercap cal factor × 1000
+    uint16_t cal_factor_p_x1000; // Protection cal factor × 1000
+    uint16_t max_supercap_mv;   // Configured max supercap voltage (mV)
+} ble_status_packet_t;          // Total: 46 bytes
 ```
 
 ### PARAMS_WRITE Payload (0x04) — 28 bytes

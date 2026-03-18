@@ -50,14 +50,28 @@
 #define TOUCH_I2C_ADDR  0x3B
 
 // --- I2S Audio (built-in amplifier → speaker on P6) ---
+// Defaults for JC3248W535; board_config.h may override for DevKit variants
+#ifndef PIN_I2S_LRCLK
 #define PIN_I2S_LRCLK   GPIO_NUM_2   // I2S Word Select (WS)
+#endif
+#ifndef PIN_I2S_BCLK
 #define PIN_I2S_BCLK    GPIO_NUM_42  // I2S Bit Clock
+#endif
+#ifndef PIN_I2S_DOUT
 #define PIN_I2S_DOUT    GPIO_NUM_41  // I2S Data Out
+#endif
 
 // --- Rotary Encoder (KY-040 style, 5-pin module) ---
+// Defaults for JC3248W535; board_config.h may override for DevKit variants
+#ifndef PIN_ENC_S1
 #define PIN_ENC_S1      GPIO_NUM_15  // CLK (quadrature A) — P2 pin 4
+#endif
+#ifndef PIN_ENC_S2
 #define PIN_ENC_S2      GPIO_NUM_17  // DT  (quadrature B) — P3/P4
+#endif
+#ifndef PIN_ENC_KEY
 #define PIN_ENC_KEY     GPIO_NUM_18  // SW  (push button, active LOW) — P3/P4
+#endif
 
 // --- Spare GPIOs (available for future expansion) ---
 #define PIN_SPARE_1     GPIO_NUM_9   // P2 pin 7 (ADC1_CH8) — reserved for temp sensor
@@ -78,22 +92,32 @@
 #define ADC_EMA_ALPHA        0.2f       // EMA smoothing factor (lower = smoother, slower)
 
 // Voltage divider multipliers (calculate real voltage from ADC reading)
-#define SUPERCAP_V_MULT      (25.0f / 15.0f)   // 10k+15k divider: Vreal = Vadc × (R1+R2)/R2
+#define SUPERCAP_V_MULT      (43.0f / 10.0f)    // 33k+10k divider: Vreal = Vadc × (R1+R2)/R2
 #define PROTECTION_V_MULT    (115.0f / 15.0f)   // 100k+15k divider (safe up to ~25V)
 
 // ============================================================================
 // Supercap Bank (2S2P, 3.0V 3000F per cell)
 // ============================================================================
-#define SUPERCAP_MAX_V       5.7f     // Max charge voltage (derated from 6.0V for longevity)
-#define SUPERCAP_FULL_V      5.5f     // UI: considered "fully charged"
-#define LOW_VOLTAGE_WARN     4.0f     // UI: low voltage warning
-#define LOW_VOLTAGE_BLOCK    3.0f     // Safety: refuse to weld below this
+// Maximum charge voltage is now USER-CONFIGURABLE via settings.
+// All thresholds (full, warn, block) are derived automatically.
+// Use settings_get_*() functions at runtime — see settings.h.
+#define SUPERCAP_V_DEFAULT   5.7f     // Factory default max charge voltage
+#define SUPERCAP_V_MIN       4.0f     // Configurable range: minimum
+#define SUPERCAP_V_MAX       12.0f    // Configurable range: maximum
+#define SUPERCAP_V_STEP      0.01f    // Adjustment step (10mV precision)
 #define SUPERCAP_CAPACITY_F  3000.0f  // Bank capacitance in Farads
+
+// Contact detect voltage divider (18kΩ + 4.7kΩ)
+// Used to compute dynamic contact threshold from max_supercap_voltage.
+#define CONTACT_R_HIGH       18.0f    // Upper resistor (kΩ)
+#define CONTACT_R_LOW        4.7f     // Lower resistor (kΩ)
+#define CONTACT_DETECT_RATIO 0.50f    // Threshold = 50% of expected divider output
 
 // ============================================================================
 // Protection Thresholds
 // ============================================================================
-#define CONTACT_THRESHOLD_V  1.5f     // Contact detection voltage threshold
+// NOTE: CONTACT_THRESHOLD_V is now computed dynamically from max_supercap_voltage
+//       via settings_get_contact_threshold(). See settings.h.
 #define PROTECT_RAIL_MIN_V   10.0f    // Gate drive rail minimum (13.5V nominal)
 #define PROTECT_RAIL_MAX_V   18.0f    // Gate drive rail maximum
 // Below this level the protection rail is treated as "not connected / bench mode".

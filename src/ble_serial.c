@@ -68,6 +68,7 @@ static uint8_t lockout_remaining_sec(void)
 // A background FreeRTOS task drains the queue and calls ota_write_chunk.
 #define OTA_Q_DEPTH     32        // Queue depth (32 × 256 = 8 KB RAM)
 #define OTA_Q_DATA_MAX  244       // Max data per chunk (240 + padding)
+#define OTA_Q_SEQ_BEGIN 0xFFFF    // Sentinel: flush task should call ota_begin()
 
 typedef struct {
     uint16_t seq;
@@ -77,6 +78,9 @@ typedef struct {
 
 static QueueHandle_t      s_ota_queue  = NULL;
 static TaskHandle_t       s_ota_task   = NULL;
+
+// Staging area for OTA_BEGIN payload — written by BLE callback, read by flush task
+static ble_ota_begin_t    s_ota_begin_payload;
 
 // Forward declaration — defined later in this file
 static int gap_event_cb(struct ble_gap_event *event, void *arg);
@@ -140,10 +144,11 @@ static uint8_t map_weld_state(weld_state_t state)
 
 static uint8_t compute_charge_percent(float voltage)
 {
-    if (voltage <= LOW_VOLTAGE_BLOCK) return 0;
-    if (voltage >= SUPERCAP_MAX_V)    return 100;
-    return (uint8_t)((voltage - LOW_VOLTAGE_BLOCK) /
-                     (SUPERCAP_MAX_V - LOW_VOLTAGE_BLOCK) * 100.0f);
+    float low  = settings_get_low_block();
+    float high = settings_get_max_voltage();
+    if (voltage <= low)  return 0;
+    if (voltage >= high) return 100;
+    return (uint8_t)((voltage - low) / (high - low) * 100.0f);
 }
 
 // ============================================================================
@@ -272,6 +277,7 @@ static void build_status_payload(ble_status_packet_t *pkt)
     pkt->raw_protection_mv  = (uint16_t)(g_weld_status.protection_voltage / cal_p * 1000.0f);
     pkt->cal_factor_v_x1000 = (uint16_t)(cal_v * 1000.0f);
     pkt->cal_factor_p_x1000 = (uint16_t)(cal_p * 1000.0f);
+    pkt->max_supercap_mv    = (uint16_t)(settings_get_max_voltage() * 1000.0f);
 }
 
 // ============================================================================
@@ -744,8 +750,8 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 
         case BLE_CMD_CALIBRATE_ADC: {
             // Payload: [0x05, channel(1), ref_mv_lo(1), ref_mv_hi(1)]
-            // channel: 0 = supercap, 1 = protection
-            // ref_mv:  user's multimeter reading in millivolts (uint16 LE)
+            // channel: 0 = supercap ADC cal, 1 = protection ADC cal
+            //          2 = max supercap voltage (ref_mv = target mV)
             if (payload_len < 4) {
                 send_nak(BLE_MSG_CMD, BLE_ERR_INVALID_RANGE);
                 return 0;
@@ -755,6 +761,22 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             uint16_t ref_mv = (uint16_t)(payload[2] | (payload[3] << 8));
             float reference = (float)ref_mv / 1000.0f;
 
+            if (channel == 2) {
+                // --- Channel 2: Set max supercap voltage ---
+                if (reference < SUPERCAP_V_MIN || reference > SUPERCAP_V_MAX) {
+                    ESP_LOGW(TAG, "Max supercap voltage %.2fV out of range (%.1f–%.1f)",
+                             reference, SUPERCAP_V_MIN, SUPERCAP_V_MAX);
+                    send_nak(BLE_MSG_CMD, BLE_ERR_INVALID_RANGE);
+                    return 0;
+                }
+                g_settings.max_supercap_voltage = reference;
+                calibration_save();
+                ESP_LOGI(TAG, "Max supercap voltage set to %.2fV via BLE", reference);
+                send_ack(BLE_MSG_CMD);
+                break;
+            }
+
+            // --- Channel 0/1: ADC calibration ---
             if (channel > 1 || reference < 0.1f || reference > 30.0f) {
                 ESP_LOGW(TAG, "Calibrate ADC: invalid channel=%d ref=%.2fV", channel, reference);
                 send_nak(BLE_MSG_CMD, BLE_ERR_INVALID_RANGE);
@@ -861,28 +883,30 @@ static int ota_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                 return 0;
             }
 
-            const ble_ota_begin_t *begin = (const ble_ota_begin_t *)payload;
-            uint8_t result = ota_begin(begin);
+            // ── CRITICAL: Do NOT call ota_begin() here! ────────────────────
+            // esp_ota_begin() erases the OTA partition which blocks for 5-10s
+            // on a 16MB flash chip, causing BLE supervision timeout → disconnect.
+            // Instead, copy the payload and queue a sentinel for the flush task.
+            memcpy(&s_ota_begin_payload, payload, sizeof(ble_ota_begin_t));
 
-            ble_ota_ack_t ack = { .status = result, .progress = 0, .seq = 0 };
-            send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
-
-            if (result == BLE_OTA_STATUS_OK) {
-                ESP_LOGI(TAG, "OTA session started");
-
-                // Request fast connection interval for OTA throughput
-                // Range: 7.5ms min – 15ms max (in 1.25ms units: 6 – 12)
-                struct ble_gap_upd_params conn_params = {0};
-                conn_params.itvl_min = 6;     // 7.5ms
-                conn_params.itvl_max = 12;    // 15ms
-                conn_params.latency  = 0;
-                conn_params.supervision_timeout = 400; // 4 seconds
-                int rc = ble_gap_update_params(s_conn_handle, &conn_params);
-                if (rc == 0) {
-                    ESP_LOGI(TAG, "Requested fast BLE conn interval (7.5–15ms) for OTA");
+            if (s_ota_queue) {
+                ota_q_item_t item;
+                item.seq      = OTA_Q_SEQ_BEGIN;  // Sentinel: "call ota_begin()"
+                item.data_len = 0;
+                if (xQueueSend(s_ota_queue, &item, 0) == pdTRUE) {
+                    ESP_LOGI(TAG, "OTA BEGIN queued for background processing");
+                    // Show "Preparing..." on LCD immediately
+                    ui_show_ota_progress(0);
                 } else {
-                    ESP_LOGW(TAG, "Failed to update conn params: rc=%d", rc);
+                    ESP_LOGE(TAG, "OTA queue full — cannot queue BEGIN");
+                    ble_ota_ack_t ack = { .status = BLE_OTA_STATUS_BUSY, .progress = 0, .seq = 0 };
+                    send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
                 }
+            } else {
+                // No queue — should not happen
+                ESP_LOGE(TAG, "OTA queue not initialized");
+                ble_ota_ack_t ack = { .status = BLE_OTA_STATUS_FLASH_ERR, .progress = 0, .seq = 0 };
+                send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
             }
             break;
         }
@@ -1123,6 +1147,38 @@ static void ota_flush_task(void *arg)
         // Block until a chunk arrives
         if (xQueueReceive(s_ota_queue, &item, portMAX_DELAY) != pdTRUE) continue;
 
+        // ── Handle OTA_BEGIN sentinel ──────────────────────────────────
+        if (item.seq == OTA_Q_SEQ_BEGIN) {
+            ESP_LOGI(TAG, "OTA flush: calling ota_begin() (flash erase — may take seconds)");
+            uint8_t result = ota_begin(&s_ota_begin_payload);
+
+            // Send the real ACK/NAK to the app
+            ble_ota_ack_t ack = { .status = result, .progress = 0, .seq = 0 };
+            send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
+
+            if (result == BLE_OTA_STATUS_OK) {
+                ESP_LOGI(TAG, "OTA session started (background)");
+
+                // Request fast connection interval for OTA throughput
+                struct ble_gap_upd_params conn_params = {0};
+                conn_params.itvl_min = 6;     // 7.5ms
+                conn_params.itvl_max = 12;    // 15ms
+                conn_params.latency  = 0;
+                conn_params.supervision_timeout = 400; // 4 seconds
+                int rc = ble_gap_update_params(s_conn_handle, &conn_params);
+                if (rc == 0) {
+                    ESP_LOGI(TAG, "Requested fast BLE conn interval for OTA");
+                } else {
+                    ESP_LOGW(TAG, "Failed to update conn params: rc=%d", rc);
+                }
+            } else {
+                ESP_LOGE(TAG, "ota_begin() failed: 0x%02X", result);
+                ui_hide_ota_progress();
+            }
+            continue;
+        }
+
+        // ── Normal data chunk ──────────────────────────────────────────
         uint8_t result = ota_write_chunk(item.seq, item.data, item.data_len);
 
         // Windowed ACK: respond every N chunks, on error, or at 100%

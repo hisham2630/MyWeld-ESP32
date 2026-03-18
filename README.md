@@ -37,8 +37,10 @@
 - A **P1 / T / P2 dual-pulse** sequence for professional weld quality
 - **BLE companion app** connectivity (Android) via a custom binary protocol
 - Up to **10 named presets** stored in NVS (flash)
-- **I2S audio** feedback (startup melody, beeps, error tones)
-- Real-time **supercapacitor voltage monitoring** with voltage-based weld blocking
+- **P1/T/P2/P3/P4 quad-pulse** support for advanced weld profiles
+- **I2S audio** feedback (startup melody, beeps, error tones) with adjustable volume
+- Real-time **supercapacitor voltage monitoring** with configurable max voltage (4.0–12.0 V)
+- **ADC calibration** system with per-channel correction factors stored in calibration partition
 
 ---
 
@@ -50,7 +52,7 @@
 | **Display** | 3.5″ 480×320 TFT, QSPI, AXS15231B controller |
 | **Touch** | Capacitive touch via I2C (addr `0x3B`) |
 | **Audio** | Built-in I2S amplifier → speaker (P6 header) |
-| **Supercap Bank** | 2S2P configuration, 3000 F / 3.0 V per cell, max 5.7 V |
+| **Supercap Bank** | Configurable — supports 4.0–12.0 V (e.g., 2S2P @ 5.7 V or 4S @ 12.0 V) |
 | **Output** | MOSFET bank fire signal (`GPIO 46`) |
 | **Charger** | Supercap charger enable (`GPIO 16`, active-LOW) |
 | **Weld Button** | External trigger (`GPIO 14`, active-LOW, pull-up) |
@@ -106,22 +108,24 @@ ble_task     (priority 1)       adc_task      (priority  3)
 | **MAN** (Manual) | Physical button (`GPIO 14`) | Press and hold to fire |
 | **AUTO** | Electrode contact detection (`GPIO 7`) | Auto-fires after configurable delay `S` |
 
-### ✅ P1/T/P2 Dual-Pulse Sequence
+### ✅ P1/T/P2/P3/P4 Multi-Pulse Sequence
 
 ```
-[P1 pulse] ──── [T pause] ──── [P2 pulse]
-     │                               │
-  0.0–50 ms                      0.0–50 ms
-       (P2 = 0 → single pulse mode)
+[P1] ─ [T] ─ [P2] ─ [T] ─ [P3] ─ [T] ─ [P4]
+  │                                        │
+0.0–50 ms each         (P2/P3/P4 = 0 → disabled)
 ```
+
+P3 and P4 are optional additional pulses for advanced weld profiles.
 
 ### ✅ Real-Time Status Display
 
-- Supercapacitor voltage bar (0–5.7 V with color coding)
-- Charge percentage
+- Supercapacitor voltage bar (0–max V with color coding, configurable max)
+- Charge percentage (derived from configurable max voltage)
 - Weld state indicator (IDLE / ARMED / FIRING / BLOCKED / ERROR)
 - Session and lifetime weld counters
 - Active preset name
+- Volume level indicator
 
 ### ✅ Preset Management
 
@@ -148,31 +152,45 @@ ble_task     (priority 1)       adc_task      (priority  3)
 | Error melody | Fault / blocked |
 | Contact tone (1000 Hz) | AUTO contact detected |
 
+### ✅ Configurable Supercap Voltage
+
+- Max voltage configurable from **4.0 V to 12.0 V** (step: 0.01 V)
+- Stored in calibration partition — survives factory reset
+- All thresholds derived automatically:
+  - Full = max − 0.2 V
+  - Low warning = 70% of max
+  - Low block = 50% of max
+  - Contact detect = dynamic (based on voltage divider ratio)
+- Settable from Android app via BLE calibration command (channel 2)
+
 ### ✅ Safety Features
 
 - MOSFET output driven **LOW on boot** before any other init
-- Low-voltage block: refuses to weld below **3.0 V**
-- Low-voltage warning: at **4.0 V**
+- Low-voltage block: refuses to weld below **50% of max voltage**
+- Low-voltage warning: at **70% of max voltage**
 - Charger disabled during pulse (prevents charging during discharge)
 - ADC-based protection rail monitoring (gate-drive health check)
 - NVS write debouncing (prevents flash wear)
+- BLE authentication with **brute-force lockout** (escalating delays)
 
 ---
 
 ## Weld Pulse Sequence
 
 ```
-        ┌─ charger OFF ─────────────────────────┐
-        │  settle 500µs                          settle 500µs
-        │          ┌────────┐        ┌────────┐  │
-OUTPUT  │          │  P1    │  T gap │  P2    │  │
-────────┘          └────────┘        └────────┘  └── charger ON
-        │←500µs→│←  P1  →│←T→│←  P2  →│←500µs→│
+        ┌─ charger OFF ────────────────────────────────────────────────┐
+        │  settle 500µs                                                settle 500µs
+        │          ┌────┐      ┌────┐      ┌────┐      ┌────┐         │
+OUTPUT  │          │ P1 │  T  │ P2 │  T  │ P3 │  T  │ P4 │         │
+────────┘          └────┘      └────┘      └────┘      └────┘         └── charger ON
+        │←500µs→│← P1→│←T→│← P2→│←T→│← P3→│←T→│← P4→│←500µs→│
 ```
 
 - **P1**: Pre-pulse (cleans surface, typically 3–8 ms)  
 - **T**: Pause between pulses (typically 5–10 ms)  
 - **P2**: Main pulse (fuses metal, typically 5–15 ms). Set to 0 for single-pulse mode.
+- **P3**: Optional third pulse (set to 0 to disable)
+- **P4**: Optional fourth pulse (set to 0 to disable)
 
 ---
 
@@ -202,7 +220,7 @@ All multi-byte values are **little-endian**.
 
 | Type | Direction | Description |
 |------|-----------|-------------|
-| `0x01` STATUS | ESP→App | 32-byte periodic status (via NOTIFY, ~500 ms) |
+| `0x01` STATUS | ESP→App | 46-byte periodic status (via NOTIFY, ~500 ms) |
 | `0x02` PARAMS_READ | App→ESP | Request current parameters |
 | `0x03` PARAMS_RESPONSE | ESP→App | Current parameters (28 bytes) |
 | `0x04` PARAMS_WRITE | App→ESP | Update parameters |
@@ -214,6 +232,38 @@ All multi-byte values are **little-endian**.
 | `0x0D` AUTH_REQUEST | App→ESP | Authenticate with PIN |
 | `0x0E` AUTH_RESPONSE | ESP→App | Authentication result |
 
+### Status Packet (0x01) — 46 bytes
+
+| Offset | Field | Type | Notes |
+|--------|-------|------|-------|
+| 0 | `supercap_mv` | u16 | Supercap voltage in mV |
+| 2 | `protection_mv` | u16 | Gate drive rail in mV |
+| 4 | `state` | u8 | Weld state enum |
+| 5 | `charge_percent` | u8 | 0–100 % |
+| 6 | `auto_mode` | u8 | 0=MAN, 1=AUTO |
+| 7 | `active_preset` | u8 | 0–19 (0xFF = user-defined) |
+| 8 | `session_welds` | u32 | Session counter |
+| 12 | `total_welds` | u32 | Lifetime counter |
+| 16 | `ble_connected` | u8 | 1 if BLE connected |
+| 17 | `sound_on` | u8 | |
+| 18 | `theme` | u8 | 0=dark, 1=light |
+| 19 | `error_code` | u8 | 0=none |
+| 20 | `p1_x10` | u16 | P1 × 10 (e.g. 50 = 5.0 ms) |
+| 22 | `t_x10` | u16 | T × 10 |
+| 24 | `p2_x10` | u16 | P2 × 10 |
+| 26 | `p3_x10` | u16 | P3 × 10 (0 = disabled) |
+| 28 | `p4_x10` | u16 | P4 × 10 (0 = disabled) |
+| 30 | `s_x10` | u16 | S × 10 (e.g. 5 = 0.5 s) |
+| 32 | `fw_major` | u8 | Firmware major version |
+| 33 | `fw_minor` | u8 | Firmware minor version |
+| 34 | `volume` | u8 | Master volume 0–100% |
+| 35 | `auth_lockout_sec` | u8 | Remaining lockout seconds |
+| 36 | `raw_supercap_mv` | u16 | Uncalibrated supercap voltage |
+| 38 | `raw_protection_mv` | u16 | Uncalibrated protection voltage |
+| 40 | `cal_factor_v_x1000` | u16 | Supercap cal factor × 1000 |
+| 42 | `cal_factor_p_x1000` | u16 | Protection cal factor × 1000 |
+| 44 | `max_supercap_mv` | u16 | Configured max supercap voltage (mV) |
+
 ### Commands (`0x05` CMD sub-types)
 
 | Sub-type | Command |
@@ -222,8 +272,10 @@ All multi-byte values are **little-endian**.
 | `0x02` | Save current params as preset |
 | `0x03` | Factory reset |
 | `0x04` | Reset weld counter |
+| `0x05` | Calibrate ADC (ch0=supercap, ch1=protection, ch2=max voltage) |
 | `0x06` | Authenticate (PIN) |
 | `0x07` | Change PIN |
+| `0x08` | Reboot device |
 
 ---
 
@@ -234,9 +286,9 @@ All multi-byte values are **little-endian**.
 | MOSFET fire output | 46 | Active HIGH, pull-down |
 | Charger enable | 16 | Active LOW |
 | Weld button | 14 | Active LOW, pull-up |
-| Supercap voltage ADC | 5 | ADC1_CH4, 10k+15k divider |
+| Supercap voltage ADC | 5 | ADC1_CH4, 33k+10k divider |
 | Protection rail ADC | 6 | ADC1_CH5, 100k+15k divider |
-| Contact detect ADC | 7 | ADC1_CH6 |
+| Contact detect ADC | 7 | ADC1_CH6, 18k+4.7k divider |
 | LCD QSPI CLK | 47 | Internal, no user wiring |
 | LCD QSPI CS | 45 | Internal |
 | LCD TE | 38 | Internal |
@@ -321,9 +373,11 @@ All hardware and behaviour constants are in [`src/config.h`](src/config.h):
 
 | Constant | Default | Description |
 |----------|---------|-------------|
-| `SUPERCAP_MAX_V` | 5.7 V | Max charge voltage |
-| `LOW_VOLTAGE_WARN` | 4.0 V | Low voltage UI warning |
-| `LOW_VOLTAGE_BLOCK` | 3.0 V | Minimum voltage to weld |
+| `SUPERCAP_V_DEFAULT` | 5.7 V | Default max charge voltage |
+| `SUPERCAP_V_MIN` | 4.0 V | Configurable range minimum |
+| `SUPERCAP_V_MAX` | 12.0 V | Configurable range maximum |
+| `SUPERCAP_V_STEP` | 0.01 V | Adjustment precision |
+| `SUPERCAP_V_MULT` | 4.3 | Voltage divider multiplier (33k+10k) |
 | `PULSE_MAX_MS` | 50 ms | Maximum pulse duration |
 | `S_VALUE_DEFAULT` | 0.5 s | Default AUTO delay |
 | `MAX_PRESETS` | 20 | Number of preset slots (7 factory + 13 user) |
@@ -332,6 +386,17 @@ All hardware and behaviour constants are in [`src/config.h`](src/config.h):
 | `NVS_SAVE_DEBOUNCE_MS` | 2000 ms | Flash write debounce |
 | `ADC_SAMPLE_INTERVAL` | 500 ms | Voltage sampling interval |
 
+### Derived Thresholds (from `max_supercap_voltage`)
+
+All voltage thresholds are computed dynamically at runtime:
+
+| Threshold | Formula | Example (5.7V) |
+|-----------|---------|----------------|
+| Full voltage | `max - 0.2` | 5.5 V |
+| Low warning | `max × 0.70` | 3.99 V |
+| Low block | `max × 0.50` | 2.85 V |
+| Contact detect | `max × R_low/(R_high+R_low) × 0.50` | Dynamic |
+
 ---
 
 ## Safety Design
@@ -339,11 +404,12 @@ All hardware and behaviour constants are in [`src/config.h`](src/config.h):
 > ⚠️ Supercapacitor spot welders store very high energy. The firmware includes multiple safety layers, but improper hardware wiring can still be dangerous. Always verify your hardware before operating.
 
 1. **Boot-time GPIO safety** — `PIN_OUTPUT` is driven LOW **before any `app_main` logic runs** to prevent accidental MOSFET activation during boot.
-2. **Voltage blocking** — Welding is hard-blocked when supercap voltage drops below `LOW_VOLTAGE_BLOCK` (3.0 V), preventing weak/incomplete welds.
+2. **Voltage blocking** — Welding is hard-blocked when supercap voltage drops below 50% of configured max voltage, preventing weak/incomplete welds.
 3. **Protection rail monitoring** — The 13.5 V gate-drive rail is sampled continuously; a fault blocks welding.
 4. **Charger interlock** — The charger is disabled during the pulse window to prevent current fighting.
 5. **NVS debouncing** — Parameter saves are debounced (`NVS_SAVE_DEBOUNCE_MS`) to reduce flash wear.
-6. **BLE authentication** — All parameter writes and commands require PIN authentication.
+6. **BLE authentication** — All parameter writes and commands require PIN authentication with brute-force lockout.
+7. **Calibration partition** — Max voltage and ADC cal factors stored in separate NVS partition, surviving factory resets.
 
 ---
 

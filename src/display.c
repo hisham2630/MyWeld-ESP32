@@ -1,3 +1,7 @@
+#include "board_config.h"
+
+#if HAS_LVGL
+
 /**
  * Display Module — esp_lcd + AXS15231B QSPI + LVGL 9.x
  * Board: JC3248W535 (AXS15231B QSPI display + AXS15231B I2C touch)
@@ -588,3 +592,5 @@ void display_set_flush_task(void *task_handle) {
 }
 
 void *display_get_io_handle(void) { return (void *)s_io_handle; }
+
+#endif // HAS_LVGL

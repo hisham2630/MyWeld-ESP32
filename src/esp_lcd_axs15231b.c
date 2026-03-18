@@ -1,3 +1,7 @@
+#include "board_config.h"
+
+#if HAS_LVGL
+
 /*
  * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
  *
@@ -694,3 +698,5 @@ static esp_err_t i2c_write_bytes(esp_lcd_touch_handle_t tp, int reg,
 
   return esp_lcd_panel_io_tx_param(tp->io, reg, data, len);
 }
+
+#endif // HAS_LVGL

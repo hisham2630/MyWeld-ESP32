@@ -35,6 +35,9 @@ typedef struct {
     float adc_cal_voltage;       // Multiplier for supercap ADC
     float adc_cal_protection;    // Multiplier for protection ADC
 
+    // Configurable supercap voltage
+    float max_supercap_voltage;  // Max charge voltage (V), range: SUPERCAP_V_MIN–SUPERCAP_V_MAX
+
     // BLE
     char ble_name[32];           // BLE device name
     char pin[PIN_MAX_LEN];       // Connection PIN (4 ASCII digits, null-terminated)
@@ -121,5 +124,25 @@ void settings_change_pin(const char *new_pin);
  * Auto-saves total to NVS.
  */
 void settings_increment_weld_count(void);
+
+// ============================================================================
+// Dynamic Voltage Threshold Getters
+// All derived from g_settings.max_supercap_voltage.
+// ============================================================================
+
+/** Max charge voltage — charger disabled above this. */
+float settings_get_max_voltage(void);
+
+/** "Fully charged" threshold — max - 0.2V (hysteresis for charger re-enable). */
+float settings_get_full_voltage(void);
+
+/** Low voltage warning — 70% of max. UI shows yellow. */
+float settings_get_low_warn(void);
+
+/** Low voltage block — 50% of max. Welding disabled below this. */
+float settings_get_low_block(void);
+
+/** Contact detection threshold — based on max voltage and contact divider. */
+float settings_get_contact_threshold(void);
 
 #endif // SETTINGS_H

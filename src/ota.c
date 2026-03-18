@@ -92,7 +92,12 @@ uint8_t ota_begin(const ble_ota_begin_t *begin)
     }
 
     // Start OTA write session
-    esp_err_t err = esp_ota_begin(s_update_partition, begin->total_size, &s_ota_handle);
+    // CRITICAL: Use OTA_SIZE_UNKNOWN to avoid erasing the entire 3MB partition
+    // upfront. A full erase blocks the SPI flash bus for 2-5 seconds, preventing
+    // BLE ISRs from reading flash → Interrupt WDT → crash.
+    // With OTA_SIZE_UNKNOWN, sectors are erased on-demand during esp_ota_write()
+    // (~10ms per 4KB sector), keeping the bus available for BLE.
+    esp_err_t err = esp_ota_begin(s_update_partition, OTA_SIZE_UNKNOWN, &s_ota_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
         s_update_partition = NULL;
@@ -118,8 +123,9 @@ uint8_t ota_begin(const ble_ota_begin_t *begin)
     ESP_LOGI(TAG, "New firmware version: %d.%d.%d",
              begin->fw_major, begin->fw_minor, begin->fw_patch);
 
-    // Show progress overlay on display
-    ui_show_ota_progress(0);
+    // Note: ui_show_ota_progress(0) is already called by the BLE handler
+    // before queuing OTA_BEGIN. Don't call it again here to avoid duplicate
+    // LCD writes from ota_flush_task (Core 1) racing with lcd_update_task (Core 0).
 
     return BLE_OTA_STATUS_OK;
 }

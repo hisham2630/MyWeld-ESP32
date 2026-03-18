@@ -70,6 +70,7 @@ static void settings_load_defaults(void)
     memcpy(g_settings.presets, factory_presets, sizeof(factory_presets));
     g_settings.adc_cal_voltage = 1.0740f;
     g_settings.adc_cal_protection = 1.0410f;
+    g_settings.max_supercap_voltage = SUPERCAP_V_DEFAULT;
     strncpy(g_settings.ble_name, BLE_DEVICE_NAME, sizeof(g_settings.ble_name) - 1);
     g_settings.ble_name[sizeof(g_settings.ble_name) - 1] = '\0';
     strncpy(g_settings.pin, PIN_DEFAULT, PIN_MAX_LEN - 1);
@@ -246,10 +247,12 @@ void calibration_save(void)
     }
     nvs_set_i32(h, "calV", (int32_t)(g_settings.adc_cal_voltage * 1000.0f));
     nvs_set_i32(h, "calP", (int32_t)(g_settings.adc_cal_protection * 1000.0f));
+    nvs_set_i32(h, "maxScV", (int32_t)(g_settings.max_supercap_voltage * 1000.0f));
     nvs_commit(h);
     nvs_close(h);
-    ESP_LOGI(TAG, "Calibration saved: voltage=%.4f protection=%.4f",
-             g_settings.adc_cal_voltage, g_settings.adc_cal_protection);
+    ESP_LOGI(TAG, "Calibration saved: voltage=%.4f protection=%.4f maxSc=%.2fV",
+             g_settings.adc_cal_voltage, g_settings.adc_cal_protection,
+             g_settings.max_supercap_voltage);
 }
 
 void calibration_init(void)
@@ -281,6 +284,18 @@ void calibration_init(void)
         nvs_close(h);
     }
 
+    // Load max supercap voltage from dedicated partition
+    if (nvs_open_from_partition(CAL_PARTITION, CAL_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        int32_t raw;
+        if (nvs_get_i32(h, "maxScV", &raw) == ESP_OK) {
+            float val = (float)raw / 1000.0f;
+            if (val >= SUPERCAP_V_MIN && val <= SUPERCAP_V_MAX) {
+                g_settings.max_supercap_voltage = val;
+            }
+        }
+        nvs_close(h);
+    }
+
     // Migration: if not in calib partition, check legacy myweld namespace
     if (!found) {
         nvs_handle_t legacy;
@@ -306,8 +321,9 @@ void calibration_init(void)
         }
     }
 
-    ESP_LOGI(TAG, "Calibration loaded: voltage=%.4f protection=%.4f",
-             g_settings.adc_cal_voltage, g_settings.adc_cal_protection);
+    ESP_LOGI(TAG, "Calibration loaded: voltage=%.4f protection=%.4f maxSc=%.2fV",
+             g_settings.adc_cal_voltage, g_settings.adc_cal_protection,
+             g_settings.max_supercap_voltage);
 }
 
 void settings_save(void)
@@ -430,4 +446,36 @@ void settings_change_pin(const char *new_pin)
     g_settings.pin[PIN_MAX_LEN - 1] = '\0';
     settings_save_now();
     ESP_LOGI(TAG, "PIN changed");
+}
+
+// ============================================================================
+// Dynamic Voltage Threshold Getters
+// ============================================================================
+
+float settings_get_max_voltage(void)
+{
+    return g_settings.max_supercap_voltage;
+}
+
+float settings_get_full_voltage(void)
+{
+    return g_settings.max_supercap_voltage - 0.2f;
+}
+
+float settings_get_low_warn(void)
+{
+    return g_settings.max_supercap_voltage * 0.70f;
+}
+
+float settings_get_low_block(void)
+{
+    return g_settings.max_supercap_voltage * 0.50f;
+}
+
+float settings_get_contact_threshold(void)
+{
+    // Contact detect divider: Vin × R_low / (R_high + R_low) × detection ratio
+    return g_settings.max_supercap_voltage
+           * (CONTACT_R_LOW / (CONTACT_R_HIGH + CONTACT_R_LOW))
+           * CONTACT_DETECT_RATIO;
 }
