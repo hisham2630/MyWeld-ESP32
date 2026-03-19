@@ -22,6 +22,10 @@
 #include "ui.h"
 #include "display_hal.h"
 #include "settings.h"
+
+#if HAS_CHAR_LCD
+#include "lcd2004.h"
+#endif
 #include "welding.h"
 #include "ble_serial.h"
 #include "esp_log.h"
@@ -57,6 +61,7 @@ void ui_stub_refresh_display(void)
 {
     // ── OTA overlay takes priority over normal dashboard ──
     if (s_ota_overlay) {
+#if HAS_CHAR_LCD
         char buf[21];
 
         lcd2004_print_row(0, "==  OTA UPDATING  ==");
@@ -83,6 +88,10 @@ void ui_stub_refresh_display(void)
         lcd2004_print_row(2, bar);
 
         lcd2004_print_row(3, " DO NOT POWER OFF!  ");
+#elif HAS_NEXTION
+        // Nextion handles its own OTA display via its own UI
+        ESP_LOGI(TAG, "OTA progress: %u%% (Nextion UI)", s_ota_percent);
+#endif
 
         s_dirty = false;
         return;
@@ -184,6 +193,7 @@ void ui_trigger_reboot_countdown(bool is_factory_reset) {
     // Pause lcd_update_task so it doesn't overwrite our message
     s_paused = true;
 
+#if HAS_CHAR_LCD
     // Full-screen reboot message
     lcd2004_print_row(0, "                    ");
     lcd2004_print_row(1, is_factory_reset
@@ -200,6 +210,14 @@ void ui_trigger_reboot_countdown(bool is_factory_reset) {
     }
 
     lcd2004_print_row(2, "    Restarting...   ");
+#else
+    // Non-LCD variants: just wait 3s with log output
+    for (int i = 3; i > 0; i--) {
+        ESP_LOGW(TAG, "Restarting in %d...", i);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+#endif
+
     vTaskDelay(pdMS_TO_TICKS(200));
     esp_restart();
 }

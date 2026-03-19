@@ -2,7 +2,7 @@
 #define BLE_PROTOCOL_H
 
 /* Protocol version — bump when OTA or packet layout changes */
-#define BLE_PROTO_VERSION       4
+#define BLE_PROTO_VERSION       5
 
 /**
  * MyWeld BLE Binary Protocol V2 — Shared Header
@@ -80,6 +80,7 @@
 #define BLE_OTA_STATUS_TOO_LARGE    0x05    // Firmware too large for partition
 #define BLE_OTA_STATUS_CRC_FAIL     0x06    // SHA256 mismatch after transfer
 #define BLE_OTA_STATUS_ABORT        0x07    // OTA aborted by user/error
+#define BLE_OTA_STATUS_HW_MISMATCH  0x08    // Hardware variant mismatch (cross-flash rejected)
 
 // OTA result codes (BLE_MSG_OTA_RESULT payload byte 0)
 #define BLE_OTA_RESULT_SUCCESS      0x00    // OTA OK — rebooting
@@ -161,7 +162,11 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(ble_params_packet_t) == 33, "PARAMS packet must be 33 bytes");
 
 /**
- * VERSION_RESPONSE payload (BLE_MSG_VERSION_RESPONSE) — 12 bytes.
+ * VERSION_RESPONSE payload (BLE_MSG_VERSION_RESPONSE) — 19 bytes.
+ *
+ * Extended in protocol V5 to include hardware variant info.
+ * The Android app uses board_variant/display_type/audio_type/hw_compat_id
+ * to select the correct firmware binary from a multi-variant GitHub release.
  */
 typedef struct __attribute__((packed)) {
     uint8_t  major;
@@ -169,7 +174,11 @@ typedef struct __attribute__((packed)) {
     uint8_t  patch;
     uint8_t  reserved;
     char     build_date[8];     // "YYMMDD\0\0" format
-} ble_version_packet_t;         // Total: 12 bytes
+    uint8_t  board_variant;     // BOARD_VARIANT (1=JC3248W535, 2=DevKit)
+    uint8_t  display_type;      // DISPLAY_TYPE (1=QSPI, 2=Nextion, 3=LCD2004)
+    uint8_t  audio_type;        // AUDIO_TYPE (1=I2S, 2=Buzzer)
+    uint32_t hw_compat_id;      // Hardware compatibility ID for OTA matching
+} ble_version_packet_t;         // Total: 19 bytes
 
 /**
  * PRESET_LIST_RESP payload (BLE_MSG_PRESET_LIST_RESP) — paginated, full preset data.
@@ -211,8 +220,13 @@ typedef struct __attribute__((packed)) {
 // ============================================================================
 
 /**
- * OTA_BEGIN payload (BLE_MSG_OTA_BEGIN) — 39 bytes.
+ * OTA_BEGIN payload (BLE_MSG_OTA_BEGIN) — 43 bytes.
  * Sent by app to initiate firmware update.
+ *
+ * The hw_compat_id field enables the firmware to reject incoming
+ * updates destined for a different hardware variant BEFORE writing
+ * to flash. This prevents cross-flashing between JC3248W535,
+ * Nextion, and LCD2004 variants.
  */
 typedef struct __attribute__((packed)) {
     uint32_t total_size;        // Total firmware binary size in bytes
@@ -220,9 +234,10 @@ typedef struct __attribute__((packed)) {
     uint8_t  fw_major;          // New firmware version major
     uint8_t  fw_minor;          // New firmware version minor
     uint8_t  fw_patch;          // New firmware version patch
-} ble_ota_begin_t;              // Total: 39 bytes
+    uint32_t hw_compat_id;      // Target hardware compatibility ID (must match running device)
+} ble_ota_begin_t;              // Total: 43 bytes
 
-_Static_assert(sizeof(ble_ota_begin_t) == 39, "OTA_BEGIN must be 39 bytes");
+_Static_assert(sizeof(ble_ota_begin_t) == 43, "OTA_BEGIN must be 43 bytes");
 
 /**
  * OTA_DATA payload (BLE_MSG_OTA_DATA) — 2 + up to 240 bytes.

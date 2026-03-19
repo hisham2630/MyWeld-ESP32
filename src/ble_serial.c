@@ -16,6 +16,7 @@
 
 #include "ble_serial.h"
 #include "ble_protocol.h"
+#include "hw_descriptor.h"
 #include "ota.h"
 #include "settings.h"
 #include "welding.h"
@@ -541,7 +542,7 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
     }
 
     if (msg_type == BLE_MSG_VERSION) {
-        // Version request — respond with version info
+        // Version request — respond with version info + hardware variant
         ble_version_packet_t ver;
         memset(&ver, 0, sizeof(ver));
         ver.major = FW_VERSION_MAJOR;
@@ -550,6 +551,12 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         // Build date: extract YYMMDD from __DATE__ ("Feb 23 2026")
         snprintf(ver.build_date, sizeof(ver.build_date), "%d%02d%02d",
                  FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH);
+
+        // Hardware variant fields (protocol V5+)
+        ver.board_variant = HW_DESCRIPTOR.board_variant;
+        ver.display_type  = HW_DESCRIPTOR.display_type;
+        ver.audio_type    = HW_DESCRIPTOR.audio_type;
+        ver.hw_compat_id  = HW_DESCRIPTOR.hw_compat_id;
 
         uint8_t pkt[BLE_PROTO_HEADER_SIZE + sizeof(ver) + BLE_PROTO_CRC_SIZE];
         int pkt_len = ble_proto_build_packet(pkt, BLE_MSG_VERSION_RESPONSE,
@@ -881,6 +888,21 @@ static int ota_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                 ble_ota_ack_t ack = { .status = BLE_OTA_STATUS_FLASH_ERR, .progress = 0, .seq = 0 };
                 send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
                 return 0;
+            }
+
+            // Early hw_compat_id check — reject BEFORE queuing for flash task.
+            // The background ota_begin() has the same check as defense-in-depth.
+            {
+                const ble_ota_begin_t *begin = (const ble_ota_begin_t *)payload;
+                if (begin->hw_compat_id != 0 &&
+                    begin->hw_compat_id != HW_DESCRIPTOR.hw_compat_id) {
+                    ESP_LOGE(TAG, "OTA rejected: HW mismatch (incoming=0x%08lx device=0x%08lx)",
+                             (unsigned long)begin->hw_compat_id,
+                             (unsigned long)HW_DESCRIPTOR.hw_compat_id);
+                    ble_ota_ack_t ack = { .status = BLE_OTA_STATUS_HW_MISMATCH, .progress = 0, .seq = 0 };
+                    send_ota_notify(BLE_MSG_OTA_ACK, (const uint8_t *)&ack, sizeof(ack));
+                    return 0;
+                }
             }
 
             // ── CRITICAL: Do NOT call ota_begin() here! ────────────────────

@@ -14,6 +14,7 @@
 #include "ota.h"
 #include "ble_protocol.h"
 #include "config.h"
+#include "hw_descriptor.h"
 #include "ui.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -69,6 +70,17 @@ uint8_t ota_begin(const ble_ota_begin_t *begin)
     if (s_state != OTA_STATE_IDLE) {
         ESP_LOGW(TAG, "OTA already in progress");
         return BLE_OTA_STATUS_BUSY;
+    }
+
+    // ── Hardware compatibility check (defense-in-depth) ─────────────────
+    // Reject firmware intended for a different board/display/audio config.
+    // The app SHOULD have caught this already, but the device is the last
+    // line of defense before flash is touched.
+    if (begin->hw_compat_id != 0 && begin->hw_compat_id != HW_DESCRIPTOR.hw_compat_id) {
+        ESP_LOGE(TAG, "HW mismatch! incoming=0x%08lx device=0x%08lx",
+                 (unsigned long)begin->hw_compat_id,
+                 (unsigned long)HW_DESCRIPTOR.hw_compat_id);
+        return BLE_OTA_STATUS_HW_MISMATCH;
     }
 
     // Find the next OTA partition to write to

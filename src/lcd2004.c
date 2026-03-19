@@ -21,6 +21,9 @@
 #include "lcd2004.h"
 #include "config.h"
 #include "ui.h"
+#include "encoder.h"
+#include "settings.h"
+#include "audio.h"
 
 #include "driver/i2c.h"
 #include "esp_log.h"
@@ -51,6 +54,54 @@ static const char *TAG = "lcd2004";
 static const uint8_t ROW_ADDR[4] = {0x00, 0x40, 0x14, 0x54};
 
 static bool s_backlight = true;
+
+// ============================================================================
+// Encoder Navigation State
+// ============================================================================
+
+typedef enum {
+    LCD_ENC_NAV,     // Rotate = move focus
+    LCD_ENC_EDIT     // Rotate = change value
+} lcd_enc_mode_t;
+
+// Focus item IDs (real index into position table)
+#define LCD_FOCUS_P1    0
+#define LCD_FOCUS_T     1
+#define LCD_FOCUS_P2    2
+#define LCD_FOCUS_P3    3
+#define LCD_FOCUS_P4    4
+#define LCD_FOCUS_S     5
+#define LCD_FOCUS_MODE  6
+#define LCD_FOCUS_COUNT 7
+
+// Blink position: which row/col range to blank when blinking
+typedef struct {
+    uint8_t row;
+    uint8_t col;
+    uint8_t len;
+    float   min_val;
+    float   max_val;
+    float   step;
+} lcd_focus_meta_t;
+
+static const lcd_focus_meta_t s_focus_meta[LCD_FOCUS_COUNT] = {
+    {1,  0, 5, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P1: "P1:05"
+    {1,  6, 4, PAUSE_MIN_MS, PAUSE_MAX_MS, PAUSE_STEP_MS}, // T:  "T:00"
+    {1, 11, 5, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P2: "P2:00"
+    {2,  0, 5, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P3: "P3:00"
+    {2,  6, 5, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P4: "P4:00"
+    {2, 12, 5, S_VALUE_MIN,  S_VALUE_MAX,  S_VALUE_STEP},  // S:  "S:0.5"
+    {3, 13, 4, 0, 0, 0},                                   // MODE "AUTO"
+};
+
+static int            s_enc_focus = -1;       // -1 = no focus
+static lcd_enc_mode_t s_enc_mode  = LCD_ENC_NAV;
+static int            s_blink_tick = 0;
+static bool           s_blink_visible = true;
+
+// Blink state consumed by display_hal_update
+static int  s_blink_real = -1;   // Real focus ID for blanking
+static bool s_blink_blank = false;
 
 // ============================================================================
 // I2C helpers
@@ -197,6 +248,103 @@ void lcd2004_backlight(bool on) {
 }
 
 // ============================================================================
+// Encoder Navigation Helpers
+// ============================================================================
+
+static int lcd_focus_count(void) {
+    return g_settings.auto_mode ? LCD_FOCUS_COUNT : (LCD_FOCUS_COUNT - 1);
+}
+
+// Map logical index (skips hidden S in MAN) to real focus ID
+static int lcd_logical_to_real(int logical) {
+    if (!g_settings.auto_mode && logical >= LCD_FOCUS_S)
+        return logical + 1;  // Skip S
+    return logical;
+}
+
+static float* lcd_get_value_ptr(int real) {
+    switch (real) {
+        case LCD_FOCUS_P1: return &g_settings.p1;
+        case LCD_FOCUS_T:  return &g_settings.t;
+        case LCD_FOCUS_P2: return &g_settings.p2;
+        case LCD_FOCUS_P3: return &g_settings.p3;
+        case LCD_FOCUS_P4: return &g_settings.p4;
+        case LCD_FOCUS_S:  return &g_settings.s_value;
+        default: return NULL;
+    }
+}
+
+static void lcd_handle_encoder(encoder_event_t evt) {
+    int max_items = lcd_focus_count();
+
+    // First rotation activates focus
+    if (s_enc_focus < 0) {
+        if (evt == ENC_EVENT_CW || evt == ENC_EVENT_CCW) {
+            s_enc_mode = LCD_ENC_NAV;
+            s_enc_focus = 0;
+            s_blink_tick = 0;
+            s_blink_visible = true;
+            audio_play_beep();
+        }
+        return;
+    }
+
+    if (s_enc_mode == LCD_ENC_NAV) {
+        if (evt == ENC_EVENT_CW) {
+            s_enc_focus = (s_enc_focus + 1) % max_items;
+            s_blink_tick = 0;
+            s_blink_visible = true;
+            audio_play_beep();
+        } else if (evt == ENC_EVENT_CCW) {
+            s_enc_focus = (s_enc_focus - 1 + max_items) % max_items;
+            s_blink_tick = 0;
+            s_blink_visible = true;
+            audio_play_beep();
+        } else if (evt == ENC_EVENT_PRESS) {
+            int real = lcd_logical_to_real(s_enc_focus);
+            if (real == LCD_FOCUS_MODE) {
+                g_settings.auto_mode = !g_settings.auto_mode;
+                if (s_enc_focus >= lcd_focus_count())
+                    s_enc_focus = lcd_focus_count() - 1;
+                settings_save();
+            } else {
+                s_enc_mode = LCD_ENC_EDIT;
+                s_blink_visible = true;
+            }
+            audio_play_beep();
+        }
+    } else {
+        // Edit mode
+        if (evt == ENC_EVENT_PRESS) {
+            s_enc_mode = LCD_ENC_NAV;
+            settings_save();
+            s_blink_tick = 0;
+            audio_play_beep();
+        } else {
+            int dir = (evt == ENC_EVENT_CW) ? 1 : -1;
+            int real = lcd_logical_to_real(s_enc_focus);
+            float *val = lcd_get_value_ptr(real);
+            if (val) {
+                const lcd_focus_meta_t *m = &s_focus_meta[real];
+                *val += dir * m->step;
+                if (*val > m->max_val) *val = m->max_val;
+                if (*val < m->min_val) *val = m->min_val;
+            }
+            audio_play_beep();
+        }
+    }
+}
+
+// Blank the focused item's characters in a line buffer
+static void lcd_apply_blink(char *line, int row) {
+    if (s_blink_real < 0 || !s_blink_blank) return;
+    const lcd_focus_meta_t *m = &s_focus_meta[s_blink_real];
+    if (m->row != (uint8_t)row) return;
+    for (int i = 0; i < m->len && (m->col + i) < 20; i++)
+        line[m->col + i] = ' ';
+}
+
+// ============================================================================
 // Display HAL interface implementation
 // ============================================================================
 
@@ -224,12 +372,14 @@ void display_hal_update(
     // "P1:05 T:00 P2:00    "
     snprintf(line, sizeof(line), "P1:%02.0f T:%02.0f P2:%02.0f",
              p1_ms, t_ms, p2_ms);
+    lcd_apply_blink(line, 1);
     lcd2004_print_row(1, line);
 
     // Row 2: More pulses + S delay (mode moved to Row 3 for clarity)
     // "P3:00 P4:00 S:0     "
     snprintf(line, sizeof(line), "P3:%02.0f P4:%02.0f S:%.1f",
              p3_ms, p4_ms, s_delay);
+    lcd_apply_blink(line, 2);
     lcd2004_print_row(2, line);
 
     // Row 3: Status + Mode + BLE indicator
@@ -237,6 +387,7 @@ void display_hal_update(
     snprintf(line, sizeof(line), "%-13.13s%4s %c",
              status_text, auto_mode ? "AUTO" : " MAN",
              ble_connected ? 'B' : ' ');
+    lcd_apply_blink(line, 3);
     lcd2004_print_row(3, line);
 }
 
@@ -259,13 +410,45 @@ static void lcd_update_task(void *pvParams) {
     (void)pvParams;
     // Wait for the init screen to show for 1 second before overwriting
     vTaskDelay(pdMS_TO_TICKS(1000));
-    ESP_LOGI(TAG, "lcd_update_task running — 4Hz refresh");
+    ESP_LOGI(TAG, "lcd_update_task running — 4Hz refresh + encoder");
     while (1) {
-        // Only write to LCD when data has changed (dirty flag)
-        if (ui_stub_is_dirty()) {
+        // ── Poll rotary encoder ──
+        encoder_event_t enc_evt;
+        while (encoder_poll(&enc_evt)) {
+            lcd_handle_encoder(enc_evt);
+        }
+
+        // ── Update blink state ──
+        bool need_blink_refresh = false;
+        if (s_enc_focus >= 0) {
+            s_blink_tick++;
+            // Navigate: blink ~1Hz (toggle every 2 ticks at 4Hz)
+            // Edit: no blink (always visible)
+            if (s_enc_mode == LCD_ENC_NAV) {
+                bool new_vis = (s_blink_tick % 2) == 0;
+                if (new_vis != s_blink_visible) {
+                    s_blink_visible = new_vis;
+                    need_blink_refresh = true;
+                }
+                s_blink_real = lcd_logical_to_real(s_enc_focus);
+                s_blink_blank = !s_blink_visible;
+            } else {
+                // Edit mode: always visible, no blanking
+                s_blink_visible = true;
+                s_blink_real = -1;
+                s_blink_blank = false;
+                need_blink_refresh = true; // refresh to show value changes
+            }
+        } else {
+            s_blink_real = -1;
+            s_blink_blank = false;
+        }
+
+        // ── Refresh display when dirty or blink changed ──
+        if (ui_stub_is_dirty() || need_blink_refresh) {
             ui_stub_refresh_display();
         }
-        vTaskDelay(pdMS_TO_TICKS(250));  // 4Hz max refresh — safe for I2C on Core 0
+        vTaskDelay(pdMS_TO_TICKS(250));  // 4Hz — safe for I2C on Core 0
     }
 }
 

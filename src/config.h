@@ -23,16 +23,28 @@
 // ============================================================================
 
 // --- Welding Outputs ---
+#ifndef PIN_OUTPUT
 #define PIN_OUTPUT      GPIO_NUM_46  // MOSFET bank fire signal (P2 pin 6)
+#endif
+#ifndef PIN_CHARGER_EN
 #define PIN_CHARGER_EN  GPIO_NUM_16  // Supercap charger KEY control (P2 pin 5)
+#endif
 
 // --- Physical Input ---
+#ifndef PIN_START
 #define PIN_START       GPIO_NUM_14  // External weld button, MAN mode (P2 pin 8)
+#endif
 
 // --- ADC Inputs (all ADC1 channels for reliability) ---
+#ifndef PIN_VOLTAGE
 #define PIN_VOLTAGE     GPIO_NUM_5   // Supercap voltage — ADC1_CH4 (P2 pin 1)
+#endif
+#ifndef PIN_PROTECTION
 #define PIN_PROTECTION  GPIO_NUM_6   // Gate drive rail — ADC1_CH5 (P2 pin 2), safe up to ~25V
+#endif
+#ifndef PIN_CONTACT
 #define PIN_CONTACT     GPIO_NUM_7   // Electrode contact detect — ADC1_CH6 (P2 pin 3)
+#endif
 
 // --- Display (QSPI — internal, no user wiring) ---
 #define PIN_LCD_CLK     GPIO_NUM_47
@@ -74,7 +86,9 @@
 #endif
 
 // --- Spare GPIOs (available for future expansion) ---
+#ifndef PIN_SPARE_1
 #define PIN_SPARE_1     GPIO_NUM_9   // P2 pin 7 (ADC1_CH8) — reserved for temp sensor
+#endif
 
 // ============================================================================
 // Display Configuration

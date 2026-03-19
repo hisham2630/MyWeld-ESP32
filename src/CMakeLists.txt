@@ -14,6 +14,7 @@ set(CORE_SRCS
     "ble_serial.c"
     "ota.c"
     "encoder.c"
+    "hw_descriptor.c"
 )
 
 # --- Display sources (variant-specific) ---
@@ -63,10 +64,21 @@ set(COMP_REQUIRES
     esp_partition
 )
 
-# esp_lcd is needed for the QSPI TFT variant (display.c uses it)
-# For other variants it won't fail — the preprocessor guards prevent
-# any esp_lcd API calls from being compiled.
-list(APPEND COMP_REQUIRES esp_lcd)
+# esp_lcd is needed ONLY for the QSPI TFT variant (DISPLAY_TYPE=1).
+# For other variants, including it causes an ICE (internal compiler error)
+# in the GCC toolchain when compiling esp_lcd_panel_rgb.c.
+# We check the compile definitions passed via PlatformIO's build_flags.
+set(_display_type_val 0)
+get_directory_property(_compile_defs COMPILE_DEFINITIONS)
+foreach(_def ${_compile_defs})
+    if(_def MATCHES "^DISPLAY_TYPE=(.+)$")
+        set(_display_type_val ${CMAKE_MATCH_1})
+    endif()
+endforeach()
+
+if(_display_type_val STREQUAL "1")
+    list(APPEND COMP_REQUIRES esp_lcd)
+endif()
 
 # --- Register component ---
 idf_component_register(
