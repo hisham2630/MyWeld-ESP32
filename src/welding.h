@@ -2,6 +2,8 @@
 #define WELDING_H
 
 #include "config.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 
 /**
  * Welding state machine states
@@ -36,8 +38,23 @@ typedef struct {
 } weld_status_t;
 
 // Global welding status (read by UI task on Core 0)
+// IMPORTANT: g_weld_status is written by ADC task (Core 1) and read by
+// UI + BLE tasks (Core 0). Use g_weld_status_mux spinlock for safe access.
 extern volatile weld_status_t g_weld_status;
 extern volatile weld_state_t  g_weld_state;
+extern portMUX_TYPE           g_weld_status_mux;
+
+/**
+ * Safely snapshot g_weld_status under spinlock.
+ * Use this from any task that reads the struct (UI, BLE, etc.).
+ */
+static inline weld_status_t weld_status_snapshot(void) {
+    weld_status_t copy;
+    taskENTER_CRITICAL(&g_weld_status_mux);
+    copy = g_weld_status;
+    taskEXIT_CRITICAL(&g_weld_status_mux);
+    return copy;
+}
 
 /**
  * Initialize welding GPIO and state machine.

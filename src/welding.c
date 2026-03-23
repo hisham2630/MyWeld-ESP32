@@ -25,6 +25,7 @@
 #include "ui.h"
 #include "ble_serial.h"
 #include "ota.h"
+#include "status_led.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
@@ -43,6 +44,7 @@ static const char *TAG = "Welding";
 
 volatile weld_status_t g_weld_status = {0};
 volatile weld_state_t  g_weld_state  = WELD_STATE_IDLE;
+portMUX_TYPE           g_weld_status_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // ADC handles
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
@@ -203,6 +205,12 @@ void welding_fire_pulse(void)
     ets_delay_us(CHARGER_SETTLE_US);
 
     // 2. Fire Pulse 1 (always active — interrupts disabled for timing accuracy)
+    //
+    //    ⚠️ WDT CONSTRAINT: Each pulse disables interrupts for up to PULSE_MAX_MS (50ms).
+    //    Worst case with all 4 pulses: 4×50ms = 200ms of ISR blackout on Core 1.
+    //    The ESP32-S3 Interrupt WDT default is 300ms, so margin is 100ms.
+    //    Pause phases (ets_delay_us with interrupts ENABLED) give the WDT time to run.
+    //    Do NOT increase PULSE_MAX_MS beyond ~70ms without adjusting WDT timeout.
     g_weld_state = WELD_STATE_FIRING_P1;
     portDISABLE_INTERRUPTS();
     gpio_set_level(PIN_OUTPUT, 1);
@@ -259,6 +267,7 @@ void welding_fire_pulse(void)
     // 7. Post-pulse: update counters and feedback
     settings_increment_weld_count();
     audio_play_weld_fire();
+    status_led_set_event(LED_EVT_WELD_FIRE);
     ui_update_weld_state(WELD_STATE_IDLE);
     ui_update_weld_count(g_settings.session_welds, g_settings.total_welds);
 
@@ -299,16 +308,19 @@ void welding_task(void *pvParameters)
         // the divider reads ~1.76V at the ADC pin → ~13.5V after the ×(115/15)
         // multiplier. So any reading below PROTECT_RAIL_PLAUSIBLE_V is treated
         // as "not connected / bench mode".
-        float prot_v = g_weld_status.protection_voltage;
+        float prot_v = weld_status_snapshot().protection_voltage;
         if (prot_v > PROTECT_RAIL_PLAUSIBLE_V &&
             (prot_v < PROTECT_RAIL_MIN_V || prot_v > PROTECT_RAIL_MAX_V)) {
             if (s_protect_start_us == 0) {
                 s_protect_start_us = esp_timer_get_time();
             } else if ((esp_timer_get_time() - s_protect_start_us) > (PROTECT_CONFIRM_MS * 1000LL)) {
                 if (g_weld_state != WELD_STATE_BLOCKED) {
+                    taskENTER_CRITICAL(&g_weld_status_mux);
                     g_weld_status.protection_fault = true;
+                    taskEXIT_CRITICAL(&g_weld_status_mux);
                     g_weld_state = WELD_STATE_BLOCKED;
                     ui_update_weld_state(WELD_STATE_BLOCKED);
+                    status_led_set_event(LED_EVT_PROTECTION_FAULT);
                     audio_play_error();
                     ESP_LOGW(TAG, "PROTECTION FAULT: Rail=%.1fV (expected %.1f-%.1fV)",
                              prot_v, PROTECT_RAIL_MIN_V, PROTECT_RAIL_MAX_V);
@@ -316,9 +328,12 @@ void welding_task(void *pvParameters)
             }
         } else {
             s_protect_start_us = 0;
-            if (g_weld_status.protection_fault) {
+            if (weld_status_snapshot().protection_fault) {
+                taskENTER_CRITICAL(&g_weld_status_mux);
                 g_weld_status.protection_fault = false;
-                if (g_weld_state == WELD_STATE_BLOCKED && !g_weld_status.low_voltage_block) {
+                bool low_block = g_weld_status.low_voltage_block;
+                taskEXIT_CRITICAL(&g_weld_status_mux);
+                if (g_weld_state == WELD_STATE_BLOCKED && !low_block) {
                     g_weld_state = WELD_STATE_IDLE;
                     ui_update_weld_state(WELD_STATE_IDLE);
                     ESP_LOGI(TAG, "Protection fault cleared");
@@ -327,26 +342,35 @@ void welding_task(void *pvParameters)
         }
 
         // Check supercap voltage
-        float cap_v = g_weld_status.supercap_voltage;
-        g_weld_status.low_voltage_warn = (cap_v < settings_get_low_warn() && cap_v > 0.1f);
+        float cap_v = weld_status_snapshot().supercap_voltage;
+        bool warn = (cap_v < settings_get_low_warn() && cap_v > 0.1f);
+        taskENTER_CRITICAL(&g_weld_status_mux);
+        g_weld_status.low_voltage_warn = warn;
+        taskEXIT_CRITICAL(&g_weld_status_mux);
 
         if (cap_v < settings_get_low_block() && cap_v > 0.1f) {
             if (s_low_v_start_us == 0) {
                 s_low_v_start_us = esp_timer_get_time();
             } else if ((esp_timer_get_time() - s_low_v_start_us) > (LOW_V_CONFIRM_MS * 1000LL)) {
+                taskENTER_CRITICAL(&g_weld_status_mux);
                 g_weld_status.low_voltage_block = true;
+                taskEXIT_CRITICAL(&g_weld_status_mux);
                 if (g_weld_state == WELD_STATE_IDLE) {
                     g_weld_state = WELD_STATE_BLOCKED;
                     ui_update_weld_state(WELD_STATE_BLOCKED);
+                    status_led_set_event(LED_EVT_LOW_VOLTAGE);
                     audio_play_error();
                     ESP_LOGW(TAG, "LOW VOLTAGE: %.1fV < %.1fV", cap_v, settings_get_low_block());
                 }
             }
         } else {
             s_low_v_start_us = 0;
-            if (g_weld_status.low_voltage_block) {
+            if (weld_status_snapshot().low_voltage_block) {
+                taskENTER_CRITICAL(&g_weld_status_mux);
                 g_weld_status.low_voltage_block = false;
-                if (g_weld_state == WELD_STATE_BLOCKED && !g_weld_status.protection_fault) {
+                bool prot_fault = g_weld_status.protection_fault;
+                taskEXIT_CRITICAL(&g_weld_status_mux);
+                if (g_weld_state == WELD_STATE_BLOCKED && !prot_fault) {
                     g_weld_state = WELD_STATE_IDLE;
                     ui_update_weld_state(WELD_STATE_IDLE);
                     ESP_LOGI(TAG, "Low voltage cleared");
@@ -357,9 +381,13 @@ void welding_task(void *pvParameters)
         // "Ready" notification when caps fully charged
         if (cap_v >= settings_get_full_voltage() && !s_was_ready) {
             s_was_ready = true;
+            status_led_set_event(LED_EVT_FULLY_CHARGED);
             audio_play_ready();
             ESP_LOGI(TAG, "Supercaps fully charged: %.1fV", cap_v);
         } else if (cap_v < settings_get_full_voltage() - 0.5f) {
+            if (s_was_ready) {
+                status_led_set_event(LED_EVT_CHARGING);
+            }
             s_was_ready = false; // Hysteresis
         }
 
@@ -433,7 +461,8 @@ void welding_task(void *pvParameters)
                             if (btn_pressed && !was_pressed) {
                                 // FALLING EDGE — button just pressed
                                 if (!s_man_fired) { // One-shot: ignore if already fired this press
-                                    if (!g_weld_status.low_voltage_block && !g_weld_status.protection_fault) {
+                                    weld_status_t snap = weld_status_snapshot();
+                                    if (!snap.low_voltage_block && !snap.protection_fault) {
                                         welding_fire_pulse();
                                         s_man_fired = true; // Block re-fire until button released
                                         s_man_lockout_us = esp_timer_get_time(); // Start lockout
@@ -442,8 +471,8 @@ void welding_task(void *pvParameters)
                                     } else {
                                         audio_play_error();
                                         ESP_LOGW(TAG, "MAN trigger blocked: lowV=%d protFault=%d",
-                                                 g_weld_status.low_voltage_block,
-                                                 g_weld_status.protection_fault);
+                                                 snap.low_voltage_block,
+                                                 snap.protection_fault);
                                     }
                                 }
                             } else if (!btn_pressed && was_pressed) {
@@ -462,7 +491,7 @@ void welding_task(void *pvParameters)
 
             // --- AUTO Mode: Contact detection ---
             if (g_settings.auto_mode) {
-                bool contact = g_weld_status.contact_detected;
+                bool contact = weld_status_snapshot().contact_detected;
                 if (contact) {
                     // If we already fired on this contact, ignore until released
                     if (s_auto_fired) {
@@ -471,6 +500,7 @@ void welding_task(void *pvParameters)
                         // Contact just detected — start timing
                         g_weld_state = WELD_STATE_ARMED;
                         s_contact_start_us = esp_timer_get_time();
+                        status_led_set_event(LED_EVT_CONTACT_DETECT);
                         audio_play_contact();
                         ui_update_weld_state(WELD_STATE_ARMED);
                         ESP_LOGI(TAG, "AUTO: Contact detected, arming (S=%.1fs)", g_settings.s_value);
@@ -479,7 +509,8 @@ void welding_task(void *pvParameters)
                         int64_t elapsed_us = esp_timer_get_time() - s_contact_start_us;
                         float elapsed_s = (float)elapsed_us / 1000000.0f;
                         if (elapsed_s >= g_settings.s_value) {
-                            if (!g_weld_status.low_voltage_block && !g_weld_status.protection_fault) {
+                            weld_status_t auto_snap = weld_status_snapshot();
+                            if (!auto_snap.low_voltage_block && !auto_snap.protection_fault) {
                                 welding_fire_pulse();
                                 s_auto_fired = true; // Block re-fire until contact released
                                 ESP_LOGI(TAG, "AUTO: Weld complete, waiting for contact release");
@@ -544,11 +575,14 @@ void adc_task(void *pvParameters)
         float v_cap = ema_cap;
         float v_prot = ema_prot;
 
-        // Update global status (read by welding task)
+        // Update global status (read by welding task and UI/BLE on Core 0)
+        // Protected by spinlock to prevent torn reads across cores.
+        taskENTER_CRITICAL(&g_weld_status_mux);
         g_weld_status.supercap_voltage = v_cap;
         g_weld_status.protection_voltage = v_prot;
         g_weld_status.contact_voltage = v_contact;
         g_weld_status.contact_detected = (v_contact > settings_get_contact_threshold());
+        taskEXIT_CRITICAL(&g_weld_status_mux);
 
         // Disable charger at max voltage
         // Re-enable charger at full voltage (hysteresis)

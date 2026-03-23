@@ -26,6 +26,7 @@
 #include "audio.h"
 
 #include "driver/i2c.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -91,7 +92,7 @@ static const lcd_focus_meta_t s_focus_meta[LCD_FOCUS_COUNT] = {
     {2,  0, 5, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P3: "P3:00"
     {2,  6, 5, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P4: "P4:00"
     {2, 12, 5, S_VALUE_MIN,  S_VALUE_MAX,  S_VALUE_STEP},  // S:  "S:0.5"
-    {3, 13, 4, 0, 0, 0},                                   // MODE "AUTO"
+    {3, 10, 4, 0, 0, 0},                                   // MODE "AUTO"
 };
 
 static int            s_enc_focus = -1;       // -1 = no focus
@@ -102,6 +103,61 @@ static bool           s_blink_visible = true;
 // Blink state consumed by display_hal_update
 static int  s_blink_real = -1;   // Real focus ID for blanking
 static bool s_blink_blank = false;
+
+// ============================================================================
+// Preset (PR) Mode State
+// ============================================================================
+
+// PR mode has only 2 focusable items on the dashboard
+#define LCD_PR_FOCUS_PRESET  0   // Row 1: preset name
+#define LCD_PR_FOCUS_MODE    1   // Row 3: AUTO/MAN toggle
+#define LCD_PR_FOCUS_COUNT   2
+
+// Track UD/PR transitions to reset focus on switch
+static bool s_was_preset_mode = false;
+
+static bool lcd_is_preset_mode(void) {
+    return g_settings.active_preset != PRESET_USER_DEFINED;
+}
+
+// ── Horizontal scroll state for long preset names (MP3-player marquee) ──
+#define SCROLL_VISIBLE_WIDTH  18   // Chars available for preset name on row 1
+#define SCROLL_PAUSE_TICKS    4    // Pause at start/end (~1s at 4Hz)
+static int      s_scroll_offset   = 0;   // Current scroll position
+static int      s_scroll_tick     = 0;   // Tick counter for scroll timing
+static uint8_t  s_scroll_preset   = 0xFF; // Track which preset is scrolling
+
+// ============================================================================
+// Settings Screen State
+// ============================================================================
+
+typedef enum {
+    LCD_SCREEN_MAIN,      // Normal dashboard
+    LCD_SCREEN_SETTINGS   // Settings overlay
+} lcd_screen_t;
+
+static lcd_screen_t s_screen = LCD_SCREEN_MAIN;
+
+// Settings focus items
+#define STNG_FOCUS_VOLUME  0   // Row 1: "Volume:  80%"
+#define STNG_FOCUS_MUTE    1   // Row 2: "Sound:   ON"
+#define STNG_FOCUS_PRESET  2   // Row 3: "Preset: 0.15mm Ni"
+#define STNG_FOCUS_COUNT   3
+
+static int s_stng_focus = 0;
+
+// Preset browsing sub-state
+typedef enum {
+    STNG_PRESET_BROWSING,   // Scrolling through presets
+    STNG_PRESET_CONFIRMING  // Showing params, waiting for confirm
+} stng_preset_state_t;
+
+static stng_preset_state_t s_preset_state = STNG_PRESET_BROWSING;
+static uint8_t s_stng_preset_idx = 0;  // Currently viewed preset
+
+// Inactivity timer: auto-return to main after 30 seconds
+#define STNG_TIMEOUT_US  (30 * 1000000LL)  // 30 seconds in microseconds
+static int64_t s_stng_last_activity = 0;
 
 // ============================================================================
 // I2C helpers
@@ -344,6 +400,239 @@ static void lcd_apply_blink(char *line, int row) {
         line[m->col + i] = ' ';
 }
 
+// Reset all blink state (called on screen transitions)
+static void lcd_reset_blink(void) {
+    s_blink_tick = 0;
+    s_blink_visible = true;
+    s_blink_real = -1;
+    s_blink_blank = false;
+}
+
+// ============================================================================
+// PR Mode Encoder Handler
+// ============================================================================
+
+static void lcd_handle_encoder_pr(encoder_event_t evt) {
+    // First rotation activates focus
+    if (s_enc_focus < 0) {
+        if (evt == ENC_EVENT_CW || evt == ENC_EVENT_CCW) {
+            s_enc_mode = LCD_ENC_NAV;
+            s_enc_focus = 0;  // Start on PRESET
+            s_blink_tick = 0;
+            s_blink_visible = true;
+            audio_play_beep();
+        }
+        return;
+    }
+
+    if (s_enc_mode == LCD_ENC_NAV) {
+        if (evt == ENC_EVENT_CW || evt == ENC_EVENT_CCW) {
+            s_enc_focus = (s_enc_focus + 1) % LCD_PR_FOCUS_COUNT;
+            s_blink_tick = 0;
+            s_blink_visible = true;
+            audio_play_beep();
+        } else if (evt == ENC_EVENT_PRESS) {
+            if (s_enc_focus == LCD_PR_FOCUS_PRESET) {
+                s_enc_mode = LCD_ENC_EDIT;
+                s_blink_visible = true;
+                audio_play_beep();
+            } else if (s_enc_focus == LCD_PR_FOCUS_MODE) {
+                g_settings.auto_mode = !g_settings.auto_mode;
+                settings_save();
+                audio_play_beep();
+            }
+        }
+    } else {
+        // EDIT mode — only for PRESET focus: cycle through presets
+        if (evt == ENC_EVENT_PRESS) {
+            s_enc_mode = LCD_ENC_NAV;
+            s_blink_tick = 0;
+            audio_play_beep();
+        } else {
+            int dir = (evt == ENC_EVENT_CW) ? 1 : -1;
+            int idx = (int)g_settings.active_preset + dir;
+            if (idx >= MAX_PRESETS) idx = 0;
+            if (idx < 0) idx = MAX_PRESETS - 1;
+            settings_load_preset((uint8_t)idx);
+            audio_play_beep();
+        }
+    }
+}
+
+// ============================================================================
+// Settings Screen Rendering
+// ============================================================================
+
+static void lcd_render_settings(void) {
+    char line[21];
+
+    // Row 0: title
+    lcd2004_print_row(0, "== SETTINGS ========");
+
+    // Row 1: Volume
+    char c1 = (s_stng_focus == STNG_FOCUS_VOLUME) ? '>' : ' ';
+    snprintf(line, sizeof(line), "%cVolume:       %3d%%", c1, g_settings.volume);
+    if (s_stng_focus == STNG_FOCUS_VOLUME && s_blink_blank)
+        memset(line + 14, ' ', 4);  // Blank value area when blinking
+    lcd2004_print_row(1, line);
+
+    // Row 2: Sound mute
+    char c2 = (s_stng_focus == STNG_FOCUS_MUTE) ? '>' : ' ';
+    const char *mute_str = g_settings.sound_on ? "ON " : "OFF";
+    snprintf(line, sizeof(line), "%cSound:        %3s", c2, mute_str);
+    if (s_stng_focus == STNG_FOCUS_MUTE && s_blink_blank)
+        memset(line + 14, ' ', 3);
+    lcd2004_print_row(2, line);
+
+    // Row 3: Preset
+    char c3 = (s_stng_focus == STNG_FOCUS_PRESET) ? '>' : ' ';
+    const char *pname;
+    if (s_enc_mode == LCD_ENC_EDIT && s_stng_focus == STNG_FOCUS_PRESET) {
+        // Browsing: show the preview preset name
+        pname = (s_stng_preset_idx < MAX_PRESETS)
+                ? g_settings.presets[s_stng_preset_idx].name
+                : "???";
+    } else {
+        // NAV: show the currently active preset
+        pname = (g_settings.active_preset < MAX_PRESETS)
+                ? g_settings.presets[g_settings.active_preset].name
+                : "User Defined";
+    }
+    snprintf(line, sizeof(line), "%c%-19.19s", c3, pname);
+    if (s_stng_focus == STNG_FOCUS_PRESET && s_blink_blank)
+        memset(line + 1, ' ', 19);
+    lcd2004_print_row(3, line);
+}
+
+static void lcd_render_preset_confirm(void) {
+    if (s_stng_preset_idx >= MAX_PRESETS) return;  // Bounds guard
+
+    char line[21];
+    const weld_preset_t *p = &g_settings.presets[s_stng_preset_idx];
+
+    lcd2004_print_row(0, "== LOAD PRESET? ====");
+
+    // Row 1: preset name
+    snprintf(line, sizeof(line), " %-19.19s", p->name);
+    lcd2004_print_row(1, line);
+
+    // Row 2: P1/T/P2 preview
+    snprintf(line, sizeof(line), " P1:%02.0f T:%02.0f P2:%02.0f",
+             p->p1, p->t, p->p2);
+    lcd2004_print_row(2, line);
+
+    // Row 3: instructions
+    lcd2004_print_row(3, " Press=OK   Turn=No");
+}
+
+// ============================================================================
+// Settings Encoder Handler
+// ============================================================================
+
+static void lcd_handle_encoder_settings(encoder_event_t evt) {
+    s_stng_last_activity = esp_timer_get_time();  // Reset inactivity timer
+
+    // Long-press: exit settings → main
+    if (evt == ENC_EVENT_LONG_PRESS) {
+        s_screen = LCD_SCREEN_MAIN;
+        s_enc_mode = LCD_ENC_NAV;
+        s_preset_state = STNG_PRESET_BROWSING;
+        lcd_reset_blink();
+        audio_play_beep();
+        return;
+    }
+
+    // If in preset confirm sub-screen
+    if (s_preset_state == STNG_PRESET_CONFIRMING) {
+        if (evt == ENC_EVENT_PRESS) {
+            // Load the preset!
+            if (s_stng_preset_idx < MAX_PRESETS) {
+                settings_load_preset(s_stng_preset_idx);
+                audio_play_ready();  // Ascending chime = loaded
+            }
+            s_preset_state = STNG_PRESET_BROWSING;
+            s_enc_mode = LCD_ENC_NAV;
+            // Return to main screen after loading
+            s_screen = LCD_SCREEN_MAIN;
+            lcd_reset_blink();
+        } else {
+            // CW/CCW = cancel confirm, back to browsing
+            s_preset_state = STNG_PRESET_BROWSING;
+            audio_play_beep();
+        }
+        return;
+    }
+
+    // Normal settings navigation
+    if (s_enc_mode == LCD_ENC_NAV) {
+        if (evt == ENC_EVENT_CW) {
+            s_stng_focus = (s_stng_focus + 1) % STNG_FOCUS_COUNT;
+            s_blink_tick = 0;
+            s_blink_visible = true;
+            audio_play_beep();
+        } else if (evt == ENC_EVENT_CCW) {
+            s_stng_focus = (s_stng_focus - 1 + STNG_FOCUS_COUNT) % STNG_FOCUS_COUNT;
+            s_blink_tick = 0;
+            s_blink_visible = true;
+            audio_play_beep();
+        } else if (evt == ENC_EVENT_PRESS) {
+            s_enc_mode = LCD_ENC_EDIT;
+            // For preset: initialize browse index to current active preset
+            if (s_stng_focus == STNG_FOCUS_PRESET) {
+                s_stng_preset_idx = g_settings.active_preset;
+                if (s_stng_preset_idx >= MAX_PRESETS)
+                    s_stng_preset_idx = 0;  // Clamp if user-defined
+            }
+            audio_play_beep();
+        }
+    } else {
+        // EDIT mode
+        if (evt == ENC_EVENT_PRESS) {
+            if (s_stng_focus == STNG_FOCUS_PRESET) {
+                // Show confirm sub-screen
+                s_preset_state = STNG_PRESET_CONFIRMING;
+                audio_play_beep();
+            } else {
+                // Volume/Mute: confirm and save
+                s_enc_mode = LCD_ENC_NAV;
+                settings_save();
+                audio_play_beep();
+            }
+        } else {
+            int dir = (evt == ENC_EVENT_CW) ? 1 : -1;
+            switch (s_stng_focus) {
+                case STNG_FOCUS_VOLUME: {
+                    int v = (int)g_settings.volume + dir * 10;
+                    if (v > 100) v = 100;
+                    if (v < 0) v = 0;
+                    g_settings.volume = (uint8_t)v;
+                    audio_set_volume(g_settings.volume);
+                    break;
+                }
+                case STNG_FOCUS_MUTE: {
+                    // Play beep BEFORE toggling mute (solves "mute paradox")
+                    audio_play_beep();
+                    g_settings.sound_on = !g_settings.sound_on;
+                    audio_set_muted(!g_settings.sound_on);
+                    // Flash backlight as visual feedback for mute toggle
+                    lcd2004_backlight(false);
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                    lcd2004_backlight(true);
+                    return;  // Already played beep, skip the one below
+                }
+                case STNG_FOCUS_PRESET: {
+                    int p = (int)s_stng_preset_idx + dir;
+                    if (p >= MAX_PRESETS) p = 0;
+                    if (p < 0) p = MAX_PRESETS - 1;
+                    s_stng_preset_idx = (uint8_t)p;
+                    break;
+                }
+            }
+            audio_play_beep();
+        }
+    }
+}
+
 // ============================================================================
 // Display HAL interface implementation
 // ============================================================================
@@ -359,35 +648,91 @@ void display_hal_update(
     const char *status_text, bool ble_connected
 ) {
     char line[21];  // 20 chars + null
+    bool is_pr = lcd_is_preset_mode();
 
-    // Row 0: Voltage + charge bar + percentage
-    // "5.7V  ████████  95%"
-    int bars = (charge_pct * 8) / 100;  // 8 bar chars max (more room on 20-col)
+    // Row 0: Voltage + charge bar + percentage (same for both modes)
+    int bars = (charge_pct * 8) / 100;
     char bar_str[9] = "        ";
-    for (int i = 0; i < bars && i < 8; i++) bar_str[i] = 0xFF;  // Full block
+    for (int i = 0; i < bars && i < 8; i++) bar_str[i] = 0xFF;
     snprintf(line, sizeof(line), "%4.1fV %s %3d%%", voltage_v, bar_str, charge_pct);
     lcd2004_print_row(0, line);
 
-    // Row 1: Pulse parameters (more room now)
-    // "P1:05 T:00 P2:00    "
-    snprintf(line, sizeof(line), "P1:%02.0f T:%02.0f P2:%02.0f",
-             p1_ms, t_ms, p2_ms);
-    lcd_apply_blink(line, 1);
-    lcd2004_print_row(1, line);
+    if (is_pr) {
+        // ── PR Mode: Row 1 = Preset name (scrolling), Row 2 = empty ──
+        const char *pname = (g_settings.active_preset < MAX_PRESETS)
+            ? g_settings.presets[g_settings.active_preset].name
+            : "???";
+        int name_len = (int)strlen(pname);
 
-    // Row 2: More pulses + S delay (mode moved to Row 3 for clarity)
-    // "P3:00 P4:00 S:0     "
-    snprintf(line, sizeof(line), "P3:%02.0f P4:%02.0f S:%.1f",
-             p3_ms, p4_ms, s_delay);
-    lcd_apply_blink(line, 2);
-    lcd2004_print_row(2, line);
+        // Reset scroll when preset changes
+        if (g_settings.active_preset != s_scroll_preset) {
+            s_scroll_preset = g_settings.active_preset;
+            s_scroll_offset = 0;
+            s_scroll_tick = 0;
+        }
 
-    // Row 3: Status + Mode + BLE indicator
-    // "BLOCKED      AUTO  B"
-    snprintf(line, sizeof(line), "%-13.13s%4s %c",
+        if (name_len <= SCROLL_VISIBLE_WIDTH) {
+            // Short name — display centered, no scrolling
+            snprintf(line, sizeof(line), " %-18.18s", pname);
+        } else {
+            // Long name — MP3-player horizontal scroll
+            int max_offset = name_len - SCROLL_VISIBLE_WIDTH;
+            char window[SCROLL_VISIBLE_WIDTH + 1];
+            memcpy(window, pname + s_scroll_offset, SCROLL_VISIBLE_WIDTH);
+            window[SCROLL_VISIBLE_WIDTH] = '\0';
+            snprintf(line, sizeof(line), " %s ", window);
+
+            // Advance scroll: pause at start and end
+            s_scroll_tick++;
+            if (s_scroll_offset == 0 || s_scroll_offset == max_offset) {
+                // Pause at boundaries
+                if (s_scroll_tick >= SCROLL_PAUSE_TICKS) {
+                    s_scroll_tick = 0;
+                    if (s_scroll_offset == 0)
+                        s_scroll_offset++;           // Start scrolling right
+                    else
+                        s_scroll_offset = 0;         // Wrap back to start
+                }
+            } else {
+                // Scroll one char per tick
+                s_scroll_tick = 0;
+                s_scroll_offset++;
+            }
+        }
+
+        // Blink preset name when focused in NAV mode
+        if (s_enc_focus == LCD_PR_FOCUS_PRESET
+                && s_enc_mode == LCD_ENC_NAV && s_blink_blank)
+            memset(line + 1, ' ', 18);
+        lcd2004_print_row(1, line);
+
+        lcd2004_print_row(2, "                    ");
+    } else {
+        // ── UD Mode: Row 1 = P1/T/P2, Row 2 = P3/P4/S ──
+        snprintf(line, sizeof(line), "P1:%02.0f T:%02.0f P2:%02.0f",
+                 p1_ms, t_ms, p2_ms);
+        lcd_apply_blink(line, 1);
+        lcd2004_print_row(1, line);
+
+        snprintf(line, sizeof(line), "P3:%02.0f P4:%02.0f S:%.1f",
+                 p3_ms, p4_ms, s_delay);
+        lcd_apply_blink(line, 2);
+        lcd2004_print_row(2, line);
+    }
+
+    // Row 3: Status + Mode + UD/PR Badge + BLE indicator
+    snprintf(line, sizeof(line), "%-10.10s%4s %2s %c",
              status_text, auto_mode ? "AUTO" : " MAN",
+             is_pr ? "PR" : "UD",
              ble_connected ? 'B' : ' ');
-    lcd_apply_blink(line, 3);
+    if (is_pr) {
+        // PR blink on MODE area (col 10-13)
+        if (s_enc_focus == LCD_PR_FOCUS_MODE
+                && s_enc_mode == LCD_ENC_NAV && s_blink_blank)
+            memset(line + 10, ' ', 4);
+    } else {
+        lcd_apply_blink(line, 3);  // UD blink on MODE item
+    }
     lcd2004_print_row(3, line);
 }
 
@@ -415,37 +760,99 @@ static void lcd_update_task(void *pvParams) {
         // ── Poll rotary encoder ──
         encoder_event_t enc_evt;
         while (encoder_poll(&enc_evt)) {
-            lcd_handle_encoder(enc_evt);
+            if (s_screen == LCD_SCREEN_MAIN) {
+                if (enc_evt == ENC_EVENT_LONG_PRESS) {
+                    // Enter settings screen
+                    s_screen = LCD_SCREEN_SETTINGS;
+                    s_stng_focus = 0;
+                    s_enc_mode = LCD_ENC_NAV;
+                    s_preset_state = STNG_PRESET_BROWSING;
+                    lcd_reset_blink();
+                    s_stng_last_activity = esp_timer_get_time();
+                    audio_play_beep();
+                } else if (lcd_is_preset_mode()) {
+                    lcd_handle_encoder_pr(enc_evt);
+                } else {
+                    lcd_handle_encoder(enc_evt);
+                }
+            } else {
+                lcd_handle_encoder_settings(enc_evt);
+            }
+        }
+
+        // ── Settings inactivity timeout (30s) ──
+        if (s_screen == LCD_SCREEN_SETTINGS) {
+            int64_t now = esp_timer_get_time();
+            if ((now - s_stng_last_activity) > STNG_TIMEOUT_US) {
+                s_screen = LCD_SCREEN_MAIN;
+                s_enc_mode = LCD_ENC_NAV;
+                s_preset_state = STNG_PRESET_BROWSING;
+                lcd_reset_blink();
+                ESP_LOGI(TAG, "Settings timeout — returning to main");
+            }
+        }
+
+        // ── Detect UD/PR mode transition → reset focus ──
+        bool is_pr_now = lcd_is_preset_mode();
+        if (is_pr_now != s_was_preset_mode) {
+            s_enc_focus = -1;
+            s_enc_mode = LCD_ENC_NAV;
+            lcd_reset_blink();
+            s_was_preset_mode = is_pr_now;
         }
 
         // ── Update blink state ──
         bool need_blink_refresh = false;
-        if (s_enc_focus >= 0) {
+
+        if (s_screen == LCD_SCREEN_SETTINGS) {
+            // Settings screen blink: only in NAV mode
             s_blink_tick++;
-            // Navigate: blink ~1Hz (toggle every 2 ticks at 4Hz)
-            // Edit: no blink (always visible)
             if (s_enc_mode == LCD_ENC_NAV) {
                 bool new_vis = (s_blink_tick % 2) == 0;
                 if (new_vis != s_blink_visible) {
                     s_blink_visible = new_vis;
                     need_blink_refresh = true;
                 }
-                s_blink_real = lcd_logical_to_real(s_enc_focus);
                 s_blink_blank = !s_blink_visible;
             } else {
-                // Edit mode: always visible, no blanking
+                s_blink_visible = true;
+                s_blink_blank = false;
+                need_blink_refresh = true;
+            }
+        } else if (s_enc_focus >= 0) {
+            // Main screen blink
+            s_blink_tick++;
+            if (s_enc_mode == LCD_ENC_NAV) {
+                bool new_vis = (s_blink_tick % 2) == 0;
+                if (new_vis != s_blink_visible) {
+                    s_blink_visible = new_vis;
+                    need_blink_refresh = true;
+                }
+                if (!lcd_is_preset_mode()) {
+                    s_blink_real = lcd_logical_to_real(s_enc_focus);
+                } else {
+                    s_blink_real = -1;  // PR mode handles blink in render
+                }
+                s_blink_blank = !s_blink_visible;
+            } else {
                 s_blink_visible = true;
                 s_blink_real = -1;
                 s_blink_blank = false;
-                need_blink_refresh = true; // refresh to show value changes
+                need_blink_refresh = true;
             }
         } else {
             s_blink_real = -1;
             s_blink_blank = false;
         }
 
-        // ── Refresh display when dirty or blink changed ──
-        if (ui_stub_is_dirty() || need_blink_refresh) {
+        // ── Render ──
+        if (s_screen == LCD_SCREEN_SETTINGS) {
+            if (s_preset_state == STNG_PRESET_CONFIRMING) {
+                lcd_render_preset_confirm();
+            } else {
+                lcd_render_settings();
+            }
+        } else if (ui_stub_is_dirty() || need_blink_refresh) {
             ui_stub_refresh_display();
         }
         vTaskDelay(pdMS_TO_TICKS(250));  // 4Hz — safe for I2C on Core 0

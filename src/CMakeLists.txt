@@ -15,6 +15,7 @@ set(CORE_SRCS
     "ota.c"
     "encoder.c"
     "hw_descriptor.c"
+    "status_led.c"
 )
 
 # --- Display sources (variant-specific) ---

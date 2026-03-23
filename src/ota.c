@@ -16,6 +16,7 @@
 #include "config.h"
 #include "hw_descriptor.h"
 #include "ui.h"
+#include "status_led.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -36,6 +37,10 @@ static uint8_t           s_expected_sha256[32];
 
 // Running SHA-256 context for validation
 static mbedtls_sha256_context s_sha256_ctx;
+
+// Progress logging: track last logged percentage across ota_write_chunk calls.
+// Reset in ota_begin() so a second OTA in the same power cycle logs correctly.
+static uint8_t s_last_logged_pct = 0;
 
 // ============================================================================
 // Public: Init — rollback check
@@ -127,6 +132,11 @@ uint8_t ota_begin(const ble_ota_begin_t *begin)
     mbedtls_sha256_starts(&s_sha256_ctx, 0); // 0 = SHA-256 (not SHA-224)
 
     s_state = OTA_STATE_RECEIVING;
+    s_last_logged_pct = 0;
+
+    // Signal LED driver for OTA mode (cyan breathing)
+    status_led_set_event(LED_EVT_OTA_ACTIVE);
+    status_led_set_ota_progress(0);
 
     ESP_LOGI(TAG, "OTA started: %lu bytes → partition '%s' @ 0x%08lx",
              (unsigned long)s_total_size,
@@ -184,13 +194,13 @@ uint8_t ota_write_chunk(uint16_t seq, const uint8_t *data, uint16_t data_len)
     // Update display progress
     uint8_t progress = (uint8_t)((uint64_t)s_received * 100 / s_total_size);
     ui_show_ota_progress(progress);
+    status_led_set_ota_progress(progress);
 
-    // Log every 10%
-    static uint8_t last_logged = 0;
-    if (progress / 10 != last_logged / 10) {
+    // Log every 10% (s_last_logged_pct is reset in ota_begin)
+    if (progress / 10 != s_last_logged_pct / 10) {
         ESP_LOGI(TAG, "OTA progress: %u%% (%lu / %lu bytes)",
                  progress, (unsigned long)s_received, (unsigned long)s_total_size);
-        last_logged = progress;
+        s_last_logged_pct = progress;
     }
 
     return BLE_OTA_STATUS_OK;
@@ -253,6 +263,9 @@ uint8_t ota_finish(void)
 
     ESP_LOGI(TAG, "OTA complete! Boot partition set to '%s'. Rebooting in 2s...",
              s_update_partition->label);
+
+    // Green flash to signal success
+    status_led_set_event(LED_EVT_OTA_COMPLETE);
 
     return BLE_OTA_RESULT_SUCCESS;
 }

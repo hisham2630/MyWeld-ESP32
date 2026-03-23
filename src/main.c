@@ -29,6 +29,7 @@
 #include "encoder.h"
 #include "ota.h"
 #include "settings.h"
+#include "status_led.h"
 #include "welding.h"
 
 
@@ -155,6 +156,10 @@ void app_main(void) {
   // Initialize rotary encoder (ISR + GPIO)
   encoder_init();
 
+  // Initialize status LED (WS2812, DevKit only)
+  status_led_init();
+  status_led_set_event(LED_EVT_STARTUP);
+
   // ========================================
   // PHASE 4: Application initialization
   // ========================================
@@ -193,6 +198,12 @@ void app_main(void) {
 
   // Play startup sound
   audio_play_startup();
+
+  // Start status LED animation task (DevKit only, compiles to no-op otherwise)
+  status_led_start_task();
+
+  // After startup animation, default to "charging" base state
+  status_led_set_event(LED_EVT_CHARGING);
 
   ESP_LOGI(TAG, "All tasks started. MyWeld is ready! ⚡");
 }

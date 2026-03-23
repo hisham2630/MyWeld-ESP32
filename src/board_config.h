@@ -89,6 +89,15 @@
   #error "AUDIO_TYPE must be AUDIO_I2S (1) or AUDIO_BUZZER (2)"
 #endif
 
+// Onboard RGB LED (WS2812 NeoPixel)
+// The ESP32-S3-DevKitC-1 has a WS2812 on GPIO48.
+// The JC3248W535 uses GPIO48 for PIN_LCD_D1 — no RGB LED available.
+#if (BOARD_VARIANT == BOARD_DEVKIT)
+  #define HAS_RGB_LED        1
+#else
+  #define HAS_RGB_LED        0
+#endif
+
 // ============================================================================
 // Pin Definitions — DevKit variant overrides
 // ============================================================================
@@ -117,6 +126,12 @@
   #define PIN_I2S_BCLK       GPIO_NUM_12  // I2S Bit Clock  → MAX98357 BCLK
   #define PIN_I2S_LRCLK      GPIO_NUM_13  // I2S Word Select → MAX98357 LRC
   #define PIN_I2S_DOUT       GPIO_NUM_11  // I2S Data Out    → MAX98357 DIN
+
+  // --- Onboard RGB LED (WS2812 NeoPixel on ESP32-S3-DevKitC) ---
+  // Chinese N8R2/N16R8 clone boards use GPIO48.
+  // IMPORTANT: The board requires shorting/bridging the "RGB" solder pads
+  // near the LED for it to be connected to GPIO48.
+  #define PIN_RGB_LED        GPIO_NUM_48
 
   // --- Encoder pins (display-dependent to avoid GPIO conflicts) ---
   // GPIO16 = PIN_CHARGER_EN — encoder CANNOT use it.

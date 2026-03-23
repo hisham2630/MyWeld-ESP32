@@ -263,6 +263,10 @@ typedef struct {
 #define TASK_BLE_PRIORITY        1
 #define TASK_BLE_CORE            0      // Core 0: BLE (shares with UI)
 
+#define TASK_LED_STACK_SIZE      2048
+#define TASK_LED_PRIORITY        1      // Lowest — purely cosmetic
+#define TASK_LED_CORE            0      // Core 0: LED (lightweight, ~50Hz)
+
 // ============================================================================
 // Software Version
 // ============================================================================

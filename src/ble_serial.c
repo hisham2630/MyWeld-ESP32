@@ -22,6 +22,7 @@
 #include "welding.h"
 #include "audio.h"
 #include "ui.h"
+#include "status_led.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_nimble_hci.h"
@@ -245,10 +246,13 @@ static void build_status_payload(ble_status_packet_t *pkt)
 {
     memset(pkt, 0, sizeof(*pkt));
 
-    pkt->supercap_mv    = (uint16_t)(g_weld_status.supercap_voltage * 1000.0f);
-    pkt->protection_mv  = (uint16_t)(g_weld_status.protection_voltage * 1000.0f);
+    // Snapshot voltages under spinlock (written by ADC task on Core 1)
+    weld_status_t ws = weld_status_snapshot();
+
+    pkt->supercap_mv    = (uint16_t)(ws.supercap_voltage * 1000.0f);
+    pkt->protection_mv  = (uint16_t)(ws.protection_voltage * 1000.0f);
     pkt->state          = map_weld_state(g_weld_state);
-    pkt->charge_percent = compute_charge_percent(g_weld_status.supercap_voltage);
+    pkt->charge_percent = compute_charge_percent(ws.supercap_voltage);
     pkt->auto_mode      = g_settings.auto_mode ? 1 : 0;
     pkt->active_preset  = g_settings.active_preset;
     pkt->session_welds  = g_settings.session_welds;
@@ -274,8 +278,8 @@ static void build_status_payload(ble_status_packet_t *pkt)
     float cal_p = g_settings.adc_cal_protection;
     if (cal_v < 0.01f) cal_v = 1.0f;
     if (cal_p < 0.01f) cal_p = 1.0f;
-    pkt->raw_supercap_mv    = (uint16_t)(g_weld_status.supercap_voltage / cal_v * 1000.0f);
-    pkt->raw_protection_mv  = (uint16_t)(g_weld_status.protection_voltage / cal_p * 1000.0f);
+    pkt->raw_supercap_mv    = (uint16_t)(ws.supercap_voltage / cal_v * 1000.0f);
+    pkt->raw_protection_mv  = (uint16_t)(ws.protection_voltage / cal_p * 1000.0f);
     pkt->cal_factor_v_x1000 = (uint16_t)(cal_v * 1000.0f);
     pkt->cal_factor_p_x1000 = (uint16_t)(cal_p * 1000.0f);
     pkt->max_supercap_mv    = (uint16_t)(settings_get_max_voltage() * 1000.0f);
@@ -791,15 +795,16 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             }
 
             // Get current reading and reverse existing cal_factor to find uncalibrated value
+            weld_status_t ws = weld_status_snapshot();
             float uncal;
             if (channel == 0) {
                 float current_cal = g_settings.adc_cal_voltage;
                 if (current_cal < 0.01f) current_cal = 1.0f;
-                uncal = g_weld_status.supercap_voltage / current_cal;
+                uncal = ws.supercap_voltage / current_cal;
             } else {
                 float current_cal = g_settings.adc_cal_protection;
                 if (current_cal < 0.01f) current_cal = 1.0f;
-                uncal = g_weld_status.protection_voltage / current_cal;
+                uncal = ws.protection_voltage / current_cal;
             }
 
             if (uncal < 0.01f) {
@@ -1068,6 +1073,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 
                 // Welcome chime — soft 2-note ascending tone (like JK BMS)
                 audio_play_ble_connect();
+                status_led_set_event(LED_EVT_BLE_CONNECTED);
 
                 ESP_LOGI(TAG, "BLE client connected (handle=%d)", s_conn_handle);
             }
@@ -1084,6 +1090,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                 ota_abort();
             }
             ESP_LOGI(TAG, "BLE client disconnected, re-advertising");
+            status_led_set_event(LED_EVT_BLE_DISCONNECTED);
             // Re-start advertising
             {
                 struct ble_gap_adv_params adv_params = {0};
