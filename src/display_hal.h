@@ -7,6 +7,7 @@
  * For QSPI TFT:   display.c + ui.c (LVGL-based)
  * For Nextion:     nextion.c (UART-based, display handles rendering)
  * For LCD 20×4:    lcd2004.c (I2C character LCD)
+ * For COG 128×64:  st7567s.c (I2C graphic LCD, framebuffer)
  */
 
 #ifndef DISPLAY_HAL_H
@@ -89,6 +90,8 @@ void display_hal_start_task(void);
   #include "nextion.h"
 #elif (DISPLAY_TYPE == DISPLAY_LCD_2004)
   #include "lcd2004.h"
+#elif (DISPLAY_TYPE == DISPLAY_COG_12864)
+  #include "st7567s.h"
 #endif
 
 #endif // DISPLAY_HAL_H

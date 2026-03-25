@@ -26,6 +26,9 @@
 #if HAS_CHAR_LCD
 #include "lcd2004.h"
 #endif
+#if HAS_COG_LCD
+#include "st7567s.h"
+#endif
 #include "welding.h"
 #include "ble_serial.h"
 #include "esp_log.h"
@@ -91,6 +94,27 @@ void ui_stub_refresh_display(void)
 #elif HAS_NEXTION
         // Nextion handles its own OTA display via its own UI
         ESP_LOGI(TAG, "OTA progress: %u%% (Nextion UI)", s_ota_percent);
+#elif HAS_COG_LCD
+        // COG 128×64 OTA overlay — graphical progress bar
+        st7567s_clear(0);
+        st7567s_text_large(10, 2, "OTA UPDATE", 1);
+
+        char buf[24];
+        if (s_ota_percent == 0) {
+            st7567s_text(20, 22, "Preparing...", 1);
+        } else {
+            snprintf(buf, sizeof(buf), "Progress: %3u%%", s_ota_percent);
+            st7567s_text(16, 22, buf, 1);
+        }
+
+        // Pixel-precise progress bar: [################]
+        st7567s_rect(4, 34, 120, 10, 1);
+        int filled = (s_ota_percent * 116 + 50) / 100;
+        if (filled > 116) filled = 116;
+        if (filled > 0) st7567s_fill_rect(6, 36, filled, 6, 1);
+
+        st7567s_text(4, 50, "DO NOT POWER OFF!", 1);
+        st7567s_flush();
 #endif
 
         s_dirty = false;
@@ -214,8 +238,23 @@ void ui_trigger_reboot_countdown(bool is_factory_reset) {
     // Non-LCD variants: just wait 3s with log output
     for (int i = 3; i > 0; i--) {
         ESP_LOGW(TAG, "Restarting in %d...", i);
+#if HAS_COG_LCD
+        // COG 128×64 reboot message
+        st7567s_clear(0);
+        st7567s_text_large(10, 10,
+            is_factory_reset ? "FACTORY" : "REBOOT", 1);
+        char cb[16];
+        snprintf(cb, sizeof(cb), "%d ...", i);
+        st7567s_text_large(40, 34, cb, 1);
+        st7567s_flush();
+#endif
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+#if HAS_COG_LCD
+    st7567s_clear(0);
+    st7567s_text_large(6, 20, "Restarting", 1);
+    st7567s_flush();
+#endif
 #endif
 
     vTaskDelay(pdMS_TO_TICKS(200));

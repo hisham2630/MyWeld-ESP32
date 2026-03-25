@@ -3,7 +3,7 @@
 # Conditional compilation based on DISPLAY_TYPE and AUDIO_TYPE
 # defines set in platformio.ini build_flags.
 #
-# DISPLAY_TYPE: 1=QSPI_TFT, 2=NEXTION, 3=LCD_2004
+# DISPLAY_TYPE: 1=QSPI_TFT, 2=NEXTION, 3=LCD_2004, 4=COG_12864
 # AUDIO_TYPE:   1=I2S, 2=BUZZER
 
 # --- Core sources (always compiled) ---
@@ -42,6 +42,7 @@ set(DISPLAY_SRCS
     "esp_lcd_touch.c"
     "nextion.c"
     "lcd2004.c"
+    "st7567s.c"
 )
 
 # --- Audio sources (both included, preprocessor guards select) ---

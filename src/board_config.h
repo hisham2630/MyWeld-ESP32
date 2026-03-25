@@ -6,7 +6,7 @@
  * on build-time defines set in platformio.ini.
  *
  * Build defines expected from platformio.ini:
- *   -DDISPLAY_TYPE=<n>   (1=QSPI TFT, 2=Nextion, 3=LCD 20×4)
+ *   -DDISPLAY_TYPE=<n>   (1=QSPI TFT, 2=Nextion, 3=LCD 20×4, 4=COG 128×64)
  *   -DAUDIO_TYPE=<n>     (1=I2S, 2=LEDC Buzzer)
  *   -DBOARD_VARIANT=<n>  (1=JC3248W535, 2=DevKit, 3=GOOUUU CAM)
  */
@@ -20,6 +20,7 @@
 #define DISPLAY_QSPI_TFT     1  // JC3248W535 built-in 480×320 QSPI (AXS15231B + LVGL)
 #define DISPLAY_NEXTION       2  // Nextion HMI via UART (display handles UI rendering)
 #define DISPLAY_LCD_2004      3  // 20×4 character LCD via I2C (HD44780 + PCF8574)
+#define DISPLAY_COG_12864     4  // 128×64 graphic COG LCD via I2C (ST7567S)
 
 // ============================================================================
 // Audio type constants
@@ -78,6 +79,13 @@
   #define HAS_CHAR_LCD       0
 #endif
 
+// Does this variant use a 128×64 COG graphic LCD?
+#if (DISPLAY_TYPE == DISPLAY_COG_12864)
+  #define HAS_COG_LCD        1
+#else
+  #define HAS_COG_LCD        0
+#endif
+
 // Audio backend
 #if (AUDIO_TYPE == AUDIO_I2S)
   #define HAS_I2S_AUDIO      1
@@ -115,11 +123,15 @@
   #define NEXTION_UART_NUM   UART_NUM_1
   #define NEXTION_BAUD_RATE  115200
 
-  // --- I2C LCD pins (when DISPLAY_TYPE == DISPLAY_LCD_2004) ---
+  // --- I2C LCD pins (when DISPLAY_TYPE == DISPLAY_LCD_2004 or COG_12864) ---
   #define PIN_LCD_SDA        GPIO_NUM_8   // I2C SDA
   #define PIN_LCD_SCL        GPIO_NUM_9   // I2C SCL
-  #define LCD_I2C_ADDR       0x27         // PCF8574 default address
   #define LCD_I2C_NUM        I2C_NUM_0
+  #if (DISPLAY_TYPE == DISPLAY_COG_12864)
+    #define LCD_I2C_ADDR     0x3F         // ST7567S default (SA0=SA1=1)
+  #else
+    #define LCD_I2C_ADDR     0x27         // PCF8574 default address
+  #endif
 
   // --- I2S Audio pins (MAX98357 amplifier module) ---
   // Override JC3248W535 defaults (GPIO 41/42 conflict with JTAG on WROOM)
@@ -236,6 +248,8 @@
     #define BOARD_NAME_STRING "ESP32-S3 DevKit + Nextion"
   #elif (DISPLAY_TYPE == DISPLAY_LCD_2004)
     #define BOARD_NAME_STRING "ESP32-S3 DevKit + LCD 20x4"
+  #elif (DISPLAY_TYPE == DISPLAY_COG_12864)
+    #define BOARD_NAME_STRING "ESP32-S3 DevKit + COG 128x64"
   #else
     #define BOARD_NAME_STRING "ESP32-S3 DevKit"
   #endif
@@ -248,6 +262,10 @@
 // ============================================================================
 #if (DISPLAY_TYPE == DISPLAY_QSPI_TFT) && (BOARD_VARIANT != BOARD_JC3248W535)
   #error "QSPI TFT display is only available on the JC3248W535 board"
+#endif
+
+#if (DISPLAY_TYPE == DISPLAY_COG_12864) && (BOARD_VARIANT == BOARD_JC3248W535)
+  #error "COG 128x64 display is not supported on JC3248W535 (uses QSPI TFT)"
 #endif
 
 #if (BOARD_VARIANT == BOARD_GOOUUU_CAM) && (AUDIO_TYPE == AUDIO_I2S)
