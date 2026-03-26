@@ -109,6 +109,13 @@ static lv_obj_t    *scr_ota         = NULL;
 static lv_obj_t    *lbl_ota_pct     = NULL;
 static lv_obj_t    *bar_ota         = NULL;
 
+// Splash screen
+static lv_obj_t    *scr_splash      = NULL;
+static lv_obj_t    *lbl_splash_main = NULL;
+static lv_obj_t    *lbl_splash_sub  = NULL;
+static lv_timer_t  *tmr_splash      = NULL;
+static uint8_t      s_splash_phase  = 0;  // 0=welcome, 1=version, 2=done
+
 // Main screen widgets
 static lv_obj_t *lbl_voltage = NULL;
 static lv_obj_t *bar_voltage = NULL;
@@ -1131,12 +1138,72 @@ static void create_settings_screen(void) {
 // Public API
 // ============================================================================
 
+// ============================================================================
+// Splash Screen
+// ============================================================================
+
+static void splash_timer_cb(lv_timer_t *t) {
+    (void)t;
+    s_splash_phase++;
+
+    if (s_splash_phase == 1) {
+        // Phase 2: show app name + version + credits
+        char version_line[64];
+        snprintf(version_line, sizeof(version_line), "%s v%s",
+                 SPLASH_MSG_APP_NAME, FW_VERSION_STRING);
+        lv_label_set_text(lbl_splash_main, version_line);
+        lv_label_set_text(lbl_splash_sub, SPLASH_MSG_CREDITS);
+        lv_obj_set_style_text_font(lbl_splash_main, &lv_font_montserrat_28, 0);
+        lv_obj_align(lbl_splash_main, LV_ALIGN_CENTER, 0, -18);
+        lv_obj_clear_flag(lbl_splash_sub, LV_OBJ_FLAG_HIDDEN);
+
+        // Reschedule for Phase 2 duration
+        lv_timer_set_period(tmr_splash, SPLASH_VERSION_MS);
+    } else {
+        // Phase 3: transition to main dashboard
+        lv_timer_delete(tmr_splash);
+        tmr_splash = NULL;
+
+        lv_scr_load_anim(scr_main, LV_SCR_LOAD_ANIM_FADE_IN, 400, 0, true);
+        scr_splash = NULL;  // deleted by lv_scr_load_anim
+        lbl_splash_main = NULL;
+        lbl_splash_sub = NULL;
+    }
+}
+
+static void create_splash_screen(void) {
+    scr_splash = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(scr_splash, COLOR_BG_DARK, 0);
+    lv_obj_set_style_bg_opa(scr_splash, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(scr_splash, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Main text — Phase 1: "Welcome" (large centered)
+    lbl_splash_main = lv_label_create(scr_splash);
+    lv_label_set_text(lbl_splash_main, SPLASH_MSG_WELCOME);
+    lv_obj_set_style_text_color(lbl_splash_main, COLOR_TEXT_LIGHT, 0);
+    lv_obj_set_style_text_font(lbl_splash_main, &lv_font_montserrat_28, 0);
+    lv_obj_align(lbl_splash_main, LV_ALIGN_CENTER, 0, -8);
+
+    // Sub text — hidden in Phase 1, shown in Phase 2
+    lbl_splash_sub = lv_label_create(scr_splash);
+    lv_label_set_text(lbl_splash_sub, "");
+    lv_obj_set_style_text_color(lbl_splash_sub, COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(lbl_splash_sub, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl_splash_sub, LV_ALIGN_CENTER, 0, 16);
+    lv_obj_add_flag(lbl_splash_sub, LV_OBJ_FLAG_HIDDEN);
+}
+
+void display_hal_show_splash(void) {
+    // For LVGL: splash is shown via scr_splash + timer. No-op here.
+}
+
 void ui_init(void) {
+  create_splash_screen();
   create_main_screen();
   create_settings_screen();
   // NOTE: lv_scr_load is called from ui_task() after the flush task handle
   // and LVGL tick are properly initialized. Don't call it here.
-  ESP_LOGI(TAG, "UI initialized: main dashboard + settings");
+  ESP_LOGI(TAG, "UI initialized: splash + main dashboard + settings");
 }
 
 // ============================================================================
@@ -1184,8 +1251,19 @@ void ui_task(void *pvParameters) {
   // the screen. Doing this here (not in app_main) ensures the flush task
   // handle is set and lv_tick is running before the first render attempt.
   lv_tick_inc(20);
-  lv_scr_load(scr_main);
-  lv_obj_invalidate(lv_screen_active());
+
+  // Load splash screen first (or main if splash was skipped/deleted)
+  if (scr_splash) {
+    lv_scr_load(scr_splash);
+    lv_obj_invalidate(lv_screen_active());
+    // Start Phase 1 timer
+    s_splash_phase = 0;
+    tmr_splash = lv_timer_create(splash_timer_cb, SPLASH_WELCOME_MS, NULL);
+    lv_timer_set_repeat_count(tmr_splash, -1);  // We manage deletion manually
+  } else {
+    lv_scr_load(scr_main);
+    lv_obj_invalidate(lv_screen_active());
+  }
 
   // Seed the tick counter so the first lv_tick_inc() delta is correct.
   int64_t last_tick_us = esp_timer_get_time();

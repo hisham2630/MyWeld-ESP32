@@ -102,7 +102,7 @@
 #define ADC_RESOLUTION_BITS  12        // ESP32-S3: 12-bit (0–4095)
 #define ADC_MAX_VALUE        4095
 #define ADC_VREF             3.3f
-#define ADC_NUM_SAMPLES      16         // Multi-sample averaging (noise reduction √16 = 4×)
+#define ADC_NUM_SAMPLES      64         // Multi-sample averaging (noise reduction √64 = 8×)
 #define ADC_EMA_ALPHA        0.2f       // EMA smoothing factor (lower = smoother, slower)
 
 // Voltage divider multipliers (calculate real voltage from ADC reading)
@@ -266,6 +266,15 @@ typedef struct {
 #define TASK_LED_STACK_SIZE      2048
 #define TASK_LED_PRIORITY        1      // Lowest — purely cosmetic
 #define TASK_LED_CORE            0      // Core 0: LED (lightweight, ~50Hz)
+
+// ============================================================================
+// Splash Screen Configuration (change these to customize boot screen)
+// ============================================================================
+#define SPLASH_MSG_WELCOME    "Welcome"                // Phase 1: shown first
+#define SPLASH_MSG_APP_NAME   "MyWeld"                 // Phase 2: app name
+#define SPLASH_MSG_CREDITS    "by Hisham & Mohammed"   // Phase 2: credits line
+#define SPLASH_WELCOME_MS     1500                     // Phase 1 display time (ms)
+#define SPLASH_VERSION_MS     1500                     // Phase 2 display time (ms)
 
 // ============================================================================
 // Software Version

@@ -158,6 +158,36 @@ void display_hal_init(void) {
     lcd1604_init();
 }
 
+static void lcd1604_center_row(uint8_t row, const char *text) {
+    char buf[17];
+    int len = (int)strlen(text);
+    if (len > 16) len = 16;
+    int pad = (16 - len) / 2;
+    memset(buf, ' ', 16);
+    buf[16] = '\0';
+    memcpy(buf + pad, text, len);
+    lcd1604_print_row(row, buf);
+}
+
+void display_hal_show_splash(void) {
+    // Phase 1: Welcome
+    lcd1604_clear();
+    lcd1604_center_row(1, SPLASH_MSG_WELCOME);
+    vTaskDelay(pdMS_TO_TICKS(SPLASH_WELCOME_MS));
+
+    // Phase 2: App name + version + credits
+    lcd1604_clear();
+    char version_line[17];
+    snprintf(version_line, sizeof(version_line), "%s v%s",
+             SPLASH_MSG_APP_NAME, FW_VERSION_STRING);
+    lcd1604_center_row(1, version_line);
+    lcd1604_center_row(2, SPLASH_MSG_CREDITS);
+    vTaskDelay(pdMS_TO_TICKS(SPLASH_VERSION_MS));
+
+    // Clear for dashboard
+    lcd1604_clear();
+}
+
 void display_hal_update(
     float voltage_v, uint8_t charge_pct,
     float p1_ms, float t_ms, float p2_ms, float p3_ms, float p4_ms,

@@ -263,14 +263,45 @@ void lcd2004_init(void) {
     lcd_command(LCD_CMD_ENTRY_MODE);  // Increment, no shift
     vTaskDelay(pdMS_TO_TICKS(1));
 
-    // Show welcome message
-    lcd2004_print_row(0, "    MyWeld v1.0     ");
-    lcd2004_print_row(1, "   Spot Welder      ");
-    lcd2004_print_row(2, "   Initializing...  ");
-    lcd2004_print_row(3, "                    ");
+    // Show brief init message (splash is shown separately via display_hal_show_splash)
+    lcd2004_print_row(1, "  Initializing...   ");
 
     ESP_LOGI(TAG, "LCD 20x4 initialized (addr=0x%02X, SDA=IO%d, SCL=IO%d)",
              LCD_I2C_ADDR, PIN_LCD_SDA, PIN_LCD_SCL);
+}
+
+// ============================================================================
+// Splash Screen (2-phase)
+// ============================================================================
+
+static void lcd2004_center_row(uint8_t row, const char *text) {
+    char buf[21];
+    int len = (int)strlen(text);
+    if (len > 20) len = 20;
+    int pad = (20 - len) / 2;
+    memset(buf, ' ', 20);
+    buf[20] = '\0';
+    memcpy(buf + pad, text, len);
+    lcd2004_print_row(row, buf);
+}
+
+static void lcd2004_show_splash(void) {
+    // Phase 1: Welcome
+    lcd2004_clear();
+    lcd2004_center_row(1, SPLASH_MSG_WELCOME);
+    vTaskDelay(pdMS_TO_TICKS(SPLASH_WELCOME_MS));
+
+    // Phase 2: App name + version + credits
+    lcd2004_clear();
+    char version_line[21];
+    snprintf(version_line, sizeof(version_line), "%s v%s",
+             SPLASH_MSG_APP_NAME, FW_VERSION_STRING);
+    lcd2004_center_row(1, version_line);
+    lcd2004_center_row(2, SPLASH_MSG_CREDITS);
+    vTaskDelay(pdMS_TO_TICKS(SPLASH_VERSION_MS));
+
+    // Clear for dashboard
+    lcd2004_clear();
 }
 
 void lcd2004_clear(void) {
@@ -641,6 +672,10 @@ void display_hal_init(void) {
     lcd2004_init();
 }
 
+void display_hal_show_splash(void) {
+    lcd2004_show_splash();
+}
+
 void display_hal_update(
     float voltage_v, uint8_t charge_pct,
     float p1_ms, float t_ms, float p2_ms, float p3_ms, float p4_ms,
@@ -753,8 +788,6 @@ void display_hal_set_brightness(uint8_t percent) {
 
 static void lcd_update_task(void *pvParams) {
     (void)pvParams;
-    // Wait for the init screen to show for 1 second before overwriting
-    vTaskDelay(pdMS_TO_TICKS(1000));
     ESP_LOGI(TAG, "lcd_update_task running — 4Hz refresh + encoder");
     while (1) {
         // ── Poll rotary encoder ──

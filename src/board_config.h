@@ -135,8 +135,11 @@
 
   // --- I2S Audio pins (MAX98357 amplifier module) ---
   // Override JC3248W535 defaults (GPIO 41/42 conflict with JTAG on WROOM)
+  #undef  PIN_I2S_BCLK
   #define PIN_I2S_BCLK       GPIO_NUM_12  // I2S Bit Clock  → MAX98357 BCLK
+  #undef  PIN_I2S_LRCLK
   #define PIN_I2S_LRCLK      GPIO_NUM_13  // I2S Word Select → MAX98357 LRC
+  #undef  PIN_I2S_DOUT
   #define PIN_I2S_DOUT       GPIO_NUM_11  // I2S Data Out    → MAX98357 DIN
 
   // --- Onboard RGB LED (WS2812 NeoPixel on ESP32-S3-DevKitC) ---

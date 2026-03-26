@@ -697,12 +697,45 @@ static void cog_render_settings(void) {
 
 void display_hal_init(void) {
     st7567s_init();
-    // Show welcome
+}
+
+void display_hal_show_splash(void) {
+    // Phase 1: Welcome (large centered text)
     st7567s_clear(0);
-    st7567s_text_large(10, 10, "MyWeld", 1);
-    st7567s_text(20, 32, "Spot Welder v1.0", 1);
-    st7567s_text(16, 44, "Initializing...", 1);
+    int16_t tw1 = (int16_t)strlen(SPLASH_MSG_WELCOME) * 12;  // 2x font = 12px/char
+    int16_t tx1 = (COG_WIDTH - tw1) / 2;
+    if (tx1 < 0) tx1 = 0;
+    st7567s_text_large(tx1, 22, SPLASH_MSG_WELCOME, 1);
     s_page_dirty = 0xFF;
+    st7567s_flush();
+    vTaskDelay(pdMS_TO_TICKS(SPLASH_WELCOME_MS));
+
+    // Phase 2: App name (large) + version + credits
+    st7567s_clear(0);
+    char version_str[24];
+    snprintf(version_str, sizeof(version_str), "v%s", FW_VERSION_STRING);
+
+    int16_t tw2 = (int16_t)strlen(SPLASH_MSG_APP_NAME) * 12;
+    int16_t tx2 = (COG_WIDTH - tw2) / 2;
+    if (tx2 < 0) tx2 = 0;
+    st7567s_text_large(tx2, 8, SPLASH_MSG_APP_NAME, 1);
+
+    int16_t tw3 = st7567s_text_width(version_str);
+    int16_t tx3 = (COG_WIDTH - tw3) / 2;
+    if (tx3 < 0) tx3 = 0;
+    st7567s_text(tx3, 28, version_str, 1);
+
+    int16_t tw4 = st7567s_text_width(SPLASH_MSG_CREDITS);
+    int16_t tx4 = (COG_WIDTH - tw4) / 2;
+    if (tx4 < 0) tx4 = 0;
+    st7567s_text(tx4, 42, SPLASH_MSG_CREDITS, 1);
+
+    s_page_dirty = 0xFF;
+    st7567s_flush();
+    vTaskDelay(pdMS_TO_TICKS(SPLASH_VERSION_MS));
+
+    // Clear for dashboard
+    st7567s_clear(0);
     st7567s_flush();
 }
 
@@ -744,7 +777,6 @@ void display_hal_set_brightness(uint8_t percent) {
 
 static void cog_update_task(void *pvParams) {
     (void)pvParams;
-    vTaskDelay(pdMS_TO_TICKS(1000));  // Let welcome screen show
     ESP_LOGI(TAG, "cog_update_task running — 8Hz refresh");
 
     while (1) {

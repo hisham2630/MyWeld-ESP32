@@ -150,7 +150,8 @@ void app_main(void) {
 #if HAS_LVGL
   display_init();   // QSPI TFT + LVGL init
 #else
-  display_hal_init();  // Nextion UART or I2C LCD init
+  display_hal_init();        // Nextion UART or I2C LCD init
+  display_hal_show_splash(); // 2-phase boot splash (blocking)
 #endif
 
   // Initialize rotary encoder (ISR + GPIO)
@@ -166,7 +167,7 @@ void app_main(void) {
 
   // Build UI (variant-specific)
 #if HAS_LVGL
-  ui_init();   // Create LVGL widgets
+  ui_init();   // Create LVGL widgets (includes splash screen)
 #endif
 
   // Initialize welding state machine

@@ -73,6 +73,17 @@ void display_hal_weld_fired(void);
 void display_hal_set_brightness(uint8_t percent);
 
 /**
+ * Show the 2-phase boot splash screen (blocking for non-LVGL variants).
+ *
+ * Phase 1: SPLASH_MSG_WELCOME centered on screen.
+ * Phase 2: SPLASH_MSG_APP_NAME + version + SPLASH_MSG_CREDITS.
+ *
+ * For LVGL: handled internally by ui_init() / ui_task() — this is a no-op.
+ * For non-LVGL: blocks for SPLASH_WELCOME_MS + SPLASH_VERSION_MS total.
+ */
+void display_hal_show_splash(void);
+
+/**
  * Start the UI task (for LVGL) or periodic update loop.
  * Should be called from main after all init is complete.
  */

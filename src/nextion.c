@@ -131,6 +131,22 @@ void display_hal_init(void) {
     nextion_init();
 }
 
+void display_hal_show_splash(void) {
+    // Phase 1: Welcome
+    nextion_goto_page(0);
+    nextion_set_text("tTitle", SPLASH_MSG_WELCOME);
+    nextion_set_text("tSub", "");
+    vTaskDelay(pdMS_TO_TICKS(SPLASH_WELCOME_MS));
+
+    // Phase 2: App name + version + credits
+    char version_line[64];
+    snprintf(version_line, sizeof(version_line), "%s v%s",
+             SPLASH_MSG_APP_NAME, FW_VERSION_STRING);
+    nextion_set_text("tTitle", version_line);
+    nextion_set_text("tSub", SPLASH_MSG_CREDITS);
+    vTaskDelay(pdMS_TO_TICKS(SPLASH_VERSION_MS));
+}
+
 void display_hal_update(
     float voltage_v, uint8_t charge_pct,
     float p1_ms, float t_ms, float p2_ms, float p3_ms, float p4_ms,
