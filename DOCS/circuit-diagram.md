@@ -15,11 +15,11 @@
                  |                |                |
               13.5V            5.0V            5.5V / 5A
                  |                |                |
-           TC4428 VDD       ESP32-S3          30SQ060 Schottky
-          (Gate Driver)    (via P1 5VIN)          |
+           IR4427/TLP358    ESP32-S3          30SQ060 Schottky
+           (Gate Driver)    (via P1 5VIN)          |
                  |                |           SUPERCAPS
             16x MOSFET      Controls:        2S2P 3000F
-              Gates         IO46 -> TC4428      |
+              Gates         IO46 -> Driver      |
                  |          IO16 -> Charger      |
             16x IXTP        IO14 <- Button       |
             170N075T2       IO5  <- V sense      |
@@ -41,7 +41,7 @@
 ```
     +13V BATTERY
         |
-        +-------> [1A Buck] -------> 13.5V ----> TC4428 VDD (always on)
+        +-------> [1A Buck] -------> 13.5V ----> IR4427/TLP358 VDD (always on)
         |
         +-------> [3A Buck] -------> 5.0V  ----> ESP32 P1 +5VIN (always on)
         |
@@ -97,55 +97,119 @@
 
 ## 4. Gate Drive Circuit
 
+Two gate-driver variants are supported — choose one based on your parts availability:
+
+### Variant A — IR4427PBF Half-Bridge Gate Driver
+
 ```
     13.5V (from 1A Buck)
         |
         +--------+---- VDD (pin 8)
         |        |
         |   +---------+
-        |   |  TC4428  |
+        |   | IR4427   |
+        |   |   PBF    |
         |   |          |
-        |   | IN_A  (2)|---- GND  (inverting ch, unused, tied safe)
-        |   | IN_B  (4)|<--- 10R <--- IO46 (OUTPUT_PIN)
-        |   |          |     ^^^^
-        |   |          |     EMI protection resistor
-        |   |          |     (damps noise from 2000A switching)
-        |   | OUT_A (7)|---- NC   (inverting output, not used)
-        |   | OUT_B (5)|---+      (non-inverting output → gates)
-        |   |          |   |
-        |   | GND   (3)|   |
-        |   +---------+   |
+        |   | INA   (2)|<--- 10R <--- IO46 (OUTPUT_PIN)
+        |   | INB   (4)|---- NC  (channel B unused)
+        |   |          |
+        |   | OUTA  (7)|---+      (output → gates)
+        |   | OUTB  (5)|---- NC  (channel B unused)
+        |   |          |
+        |   | GND   (3)|
+        |   | VS    (6)|
+        |   +---------+
         |        |         |
         |       GND        |
         |                  |
-        |   1.SKE12CA      |
+        |   1.5KE12A       |
         |   12V TVS        |
-        +---|>|<|----------+--- to MOSFET gates via 4R7 each
+        +---|>|<|----------+--- to MOSFET gates via 2R2 each
         |   (bidirectional)|
        GND                 |
                            |
              +-------------+---- GATE BUS
              |
-             +-- 4R7 -- Gate Q1  (IXTP170N075T2)
-             +-- 4R7 -- Gate Q2
-             +-- 4R7 -- Gate Q3
+             +-- 2R2 -- Gate Q1  (IXTP170N075T2)
+             +-- 2R2 -- Gate Q2
              :          :
-             +-- 4R7 -- Gate Q16
+             +-- 2R2 -- Gate Q16
 
-    TC4428 Pin Wiring:
-    +------+--------+-------+----------------------------------------+
-    | Pin  | Name   | Wire  | Notes                                  |
-    +------+--------+-------+----------------------------------------+
-    |  1   | NC     | --    | No connect                             |
-    |  2   | IN_A   | GND   | Inverting input tied LOW (safe)         |
-    |  3   | GND    | GND   | Ground                                 |
-    |  4   | IN_B   | IO46  | Non-inverting input via 10Ω             |
-    |  5   | OUT_B  | Gates | Non-inverting output → gate bus         |
-    |  6   | VSS    | GND   | Ground (alt pin)                       |
-    |  7   | OUT_A  | NC    | Inverting output, not used             |
-    |  8   | VDD    | 13.5V | Gate drive supply                      |
-    +------+--------+-------+----------------------------------------+
+    IR4427PBF Pin Wiring:
+    +------+--------+-------+------------------------------------------+
+    | Pin  | Name   | Wire  | Notes                                    |
+    +------+--------+-------+------------------------------------------+
+    |  1   | NC     | --    | No connect                               |
+    |  2   | INA    | IO46  | Non-inverting input via 10Ω              |
+    |  3   | GND    | GND   | Ground                                   |
+    |  4   | INB    | NC    | Second channel, not used                 |
+    |  5   | OUTB   | NC    | Second channel output, not used          |
+    |  6   | VS     | GND   | Auxiliary ground                         |
+    |  7   | OUTA   | Gates | Non-inverting output → gate bus          |
+    |  8   | VDD    | 13.5V | Gate drive supply                        |
+    +------+--------+-------+------------------------------------------+
 ```
+
+### Variant B — TLP358H(F) Photocoupler Gate Driver
+
+The TLP358H(F) provides **galvanic isolation** between the ESP32 3.3V logic
+and the 13.5V gate drive rail. This is preferable in electrically noisy
+environments and protects the MCU from gate-side voltage transients.
+
+```
+    3.3V (ESP32 side)                 13.5V (Gate drive side)
+        |                                  |
+       [R27 220Ω]                          +--------+---- VCC (pin 8)
+        |                                  |        |
+        +--→ Anode (pin 3)   TLP358H(F)    |   +---------+
+        |    ░░░░░░░░░░░░░░░░░░░░          |   |         |
+  IO46 →|    Cathode (pin 4)  LED → Photo   |   | OUTA (7)|---+
+        |    ░░░░░░░░░░░░░░░░░░░░          |   | OUTB (6)|---+
+        |                                  |   |         |   |
+        |   R25 10k → GND (pin 5 bias)    |   | GND  (5)|   |
+        |                                  |   +---------+   |
+       GND (ESP32)                        GND (gate side)    |
+                                                             |
+        1.5KE12A  12V TVS (bidirectional)                    |
+        +---|>|<|--------------------------------------------+
+        |                                                    |
+       GND                                                   |
+                                                             |
+             +-----------------------------------------------+---- GATE BUS
+             |
+             +-- 2R2 -- Gate Q3  (IXTP170N075T2)
+             +-- 2R2 -- Gate Q5
+             :          :
+             +-- 2R2 -- Gate Q16
+
+    TLP358H(F) Pin Wiring:
+    +------+----------+---------+------------------------------------------+
+    | Pin  | Name     | Wire    | Notes                                    |
+    +------+----------+---------+------------------------------------------+
+    |  1   | NC       | --      | Not connected                            |
+    |  2   | NC       | --      | Not connected                            |
+    |  3   | Anode    | 220Ω→3V3| LED anode (input side, via R27)          |
+    |  4   | Cathode  | IO46    | LED cathode (ESP32 OUTPUT_PIN)           |
+    |  5   | GND      | GND     | Output-side ground + bias (R25 10k→GND) |
+    |  6   | OUTB     | Gates   | Output B → gate bus (paralleled w/ OUTA) |
+    |  7   | OUTA     | Gates   | Output A → gate bus                      |
+    |  8   | VCC      | 13.5V   | Gate drive supply                        |
+    +------+----------+---------+------------------------------------------+
+
+    Advantage: Full galvanic isolation from ESP32 ← → Gate drive rail
+    Note: Both OUTA and OUTB are paralleled for increased drive current
+```
+
+### Variant Comparison
+
+| Feature                   | IR4427PBF          | TLP358H(F)         |
+|---------------------------|--------------------|---------------------|
+| **Isolation**             | None (direct)      | ✅ Galvanic (opto)  |
+| **Gate drive current**    | 1.5A sink/source   | ~0.6A (paralleled)  |
+| **Input threshold**       | TTL compatible     | LED forward current |
+| **EMI protection**        | 10Ω inline         | Inherent isolation  |
+| **Propagation delay**     | ~40 ns             | ~0.3 µs             |
+| **Recommended for**       | Simple builds      | Noisy environments  |
 
 ---
 
@@ -409,7 +473,7 @@
     wait 500us (settle)
         |
         v
-    OUTPUT_PIN = HIGH (IO46) -----> TC4428 ---10R--> 16x MOSFET ON
+    OUTPUT_PIN = HIGH (IO46) -----> IR4427/TLP358 ---> 16x MOSFET ON
         |                                           Supercap -> Electrodes
     wait P1 (us precision)                          ~2000A pulse
         |
@@ -467,16 +531,18 @@
 |----|------------------------|---------------------|-----|-------------------------------|
 | 1  | MCU Board              | JC3248W535          | 1   | ESP32-S3 + display + touch    |
 | 2  | MOSFET                 | IXTP170N075T2       | 16  | 75V 170A 2.1mΩ TO-220        |
-| 3  | Gate Driver            | TC4428              | 1   | Single ch (OUTB non-inv only) |
-| 4  | Gate Resistors         | 4.7Ω                | 16  | One per MOSFET gate           |
-| 4a | Input Protection R     | 10Ω                 | 1   | IO46 → TC4428 INB (EMI damp)  |
-| 5  | TVS Diode              | 1.SKE12CA           | 1   | 12V bidirectional             |
+| 3  | Gate Driver (Opt A)    | IR4427PBF           | 1   | Half-bridge, single ch (OUTA)    |
+| 3b | Gate Driver (Opt B)    | TLP358H(F)          | 1   | Photocoupler (galvanic isolation) |
+| 4  | Gate Resistors         | 2.2Ω                | 16  | One per MOSFET gate              |
+| 4a | Input Protection R     | 10Ω (IR4427) or 220Ω (TLP358) | 1 | IO46 → driver input            |
+| 4b | Bias Resistor          | 10kΩ (TLP358 only)  | 1   | TLP358 pin 5 bias to GND         |
+| 5  | TVS Diode              | 1.5KE12A            | 1   | 12V bidirectional                |
 | 6  | Charger Module         | 10A CC/CV Buck-Boost| 1   | Set 5.5V / 5A                |
 | 7  | Schottky Diode         | 30SQ060             | 1   | 60V 30A reverse blocking      |
 | 8  | Transistor             | 2N2222              | 1   | KEY pin isolation             |
 | 9  | Base Resistor          | 1kΩ                 | 1   | IO16 to 2N2222 base          |
 | 10 | Logic Buck             | 3A Buck Module      | 1   | 13V → 5.0V for ESP32         |
-| 11 | Gate Buck              | 1A Buck Module      | 1   | 13V → 13.5V for TC4428       |
+| 11 | Gate Buck              | 1A Buck Module      | 1   | 13V → 13.5V for gate driver  |
 | 12 | Supercaps              | 3.0V 3000F          | 4   | 2S2P configuration           |
 | 13 | V-Divider R1           | 10kΩ                | 1   | Supercap sense                |
 | 14 | V-Divider R2           | 15kΩ                | 1   | Supercap sense                |

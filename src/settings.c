@@ -68,7 +68,7 @@ static void settings_load_defaults(void)
     g_settings.total_welds = 0;
     g_settings.active_preset = PRESET_USER_DEFINED;
     memcpy(g_settings.presets, factory_presets, sizeof(factory_presets));
-    g_settings.adc_cal_voltage = 1.0740f;
+    g_settings.adc_cal_voltage = 1.4070f;
     g_settings.adc_cal_protection = 1.0410f;
     g_settings.max_supercap_voltage = SUPERCAP_V_DEFAULT;
     strncpy(g_settings.ble_name, BLE_DEVICE_NAME, sizeof(g_settings.ble_name) - 1);

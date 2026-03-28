@@ -34,11 +34,11 @@ Adapt the MyWeld V2.0 PRO Arduino Nano spot welder code to run on the **JC3248W5
 | Rotary Encoder + Push Button | Capacitive touchscreen |
 | EEPROM | NVS (Preferences library) |
 | 12× IRL40SC228 MOSFETs | 16× IXTP170N075T2 MOSFETs |
-| TC4422CPA gate driver | TC4428 (both channels paralleled via 10Ω resistors) |
+| TC4422CPA gate driver | IR4427PBF or TLP358H(F) (galvanic isolation variant) |
 | TPS61088 boost | 10A CC/CV buck-boost module (supercap charger, KEY pin for EN) |
 | 7805 regulator | 3A buck-boost → 5V (logic), 1A buck → 13.5V (gate drive) |
-| SMCJ13A TVS | 1.SKE12CA 12V bidirectional TVS |
-| Gate resistors 4R7 | 10Ω per MOSFET |
+| SMCJ13A TVS | 1.5KE12A 12V bidirectional TVS |
+| Gate resistors 4R7 | 2.2Ω per MOSFET |
 | Supercap-powered logic | External 13V battery |
 | — | 30SQ060 Schottky diode on charger output |
 | — | 2N2222 transistor for KEY pin isolation |
@@ -151,7 +151,7 @@ Adapt the MyWeld V2.0 PRO Arduino Nano spot welder code to run on the **JC3248W5
 ```
 13V External Battery
     │
-    ├──→ [1A Buck Module] ──→ 13.5V ──→ TC4428 VDD (gate drive, ALWAYS ON)
+    ├──→ [1A Buck Module] ──→ 13.5V ──→ IR4427/TLP358 VDD (gate drive, ALWAYS ON)
     │
     ├──→ [3A Buck Module] ──→  5.0V ──→ ESP32-S3 via P1 +5VIN (ALWAYS ON)
     │

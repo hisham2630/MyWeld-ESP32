@@ -53,6 +53,7 @@
 | **Touch** | Capacitive touch via I2C (addr `0x3B`) |
 | **Audio** | Built-in I2S amplifier → speaker (P6 header) |
 | **Supercap Bank** | Configurable — supports 4.0–12.0 V (e.g., 2S2P @ 5.7 V or 4S @ 12.0 V) |
+| **Gate Driver** | IR4427PBF (half-bridge) or TLP358H(F) (photocoupler) |
 | **Output** | MOSFET bank fire signal (`GPIO 46`) |
 | **Charger** | Supercap charger enable (`GPIO 16`, active-LOW) |
 | **Weld Button** | External trigger (`GPIO 14`, active-LOW, pull-up) |
@@ -61,11 +62,21 @@
 
 ## 🔌 Schematic
 
+Two gate-driver variants are provided — choose the one matching your build:
+
+### Variant A — IR4427 Half-Bridge Gate Driver
+
 <p align="center">
-  <img src="Schematic/Schematic.jpg" alt="MyWeld ESP32 Schematic" width="100%">
+  <img src="Schematic/SCH_ESP32-S3-wroom32_1-Sheet1-with-IR4427_2026-03-28.png" alt="MyWeld Schematic — IR4427 Gate Driver" width="100%">
 </p>
 
-> Full Altium Designer project files are in the [`Schematic/`](Schematic/) folder.
+### Variant B — TLP358H(F) Photocoupler Gate Driver
+
+<p align="center">
+  <img src="Schematic/SCH_ESP32-S3-wroom32_2-Sheet1-with-TLP358_2026-03-28.png" alt="MyWeld Schematic — TLP358 Photocoupler" width="100%">
+</p>
+
+> EasyEDA project files are in the [`Schematic/`](Schematic/) folder.
 
 ---
 
@@ -344,10 +355,10 @@ MyWeld-ESP32/
 ├── sdkconfig.defaults      # ESP-IDF SDK defaults
 ├── sdkconfig.jc3248w535    # Board-specific sdkconfig
 ├── pin-definition.txt      # Quick GPIO reference
-├── Schematic/              # Altium Designer project + schematic image
-│   ├── Schematic.jpg
-│   ├── Sheet1.SchDoc
-│   └── ...
+├── Schematic/              # EasyEDA project + schematic images
+│   ├── SCH_..._IR4427_2026-03-28.png   # Gate driver variant A
+│   ├── SCH_..._TLP358_2026-03-28.png   # Gate driver variant B
+│   └── easyida/            # EasyEDA source files
 └── src/
     ├── main.c              # Entry point, task launcher
     ├── config.h            # All pin defs, thresholds, timing constants
