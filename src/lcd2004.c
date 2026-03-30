@@ -789,7 +789,22 @@ void display_hal_set_brightness(uint8_t percent) {
 static void lcd_update_task(void *pvParams) {
     (void)pvParams;
     ESP_LOGI(TAG, "lcd_update_task running — 4Hz refresh + encoder");
+
     while (1) {
+        // ── OTA mode: skip ALL normal logic, only render OTA overlay ──
+        if (ui_stub_is_ota_active()) {
+            // Drain (discard) any encoder events during OTA
+            encoder_event_t discard;
+            while (encoder_poll(&discard)) { /* ignore */ }
+
+            // Only redraw when percentage actually changes (avoids flicker)
+            if (ui_stub_is_dirty()) {
+                ui_stub_refresh_display();
+            }
+            vTaskDelay(pdMS_TO_TICKS(250));
+            continue;
+        }
+
         // ── Poll rotary encoder ──
         encoder_event_t enc_evt;
         while (encoder_poll(&enc_evt)) {

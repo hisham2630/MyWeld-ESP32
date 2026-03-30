@@ -211,6 +211,7 @@
 #define MAX_PRESETS           20   // 7 factory (read-only) + 13 user-custom
 #define PRESET_USER_DEFINED   0xFF // Sentinel: pulse cards are user-editable (no preset loaded)
 #define PRESET_NAME_LEN      20
+#define FACTORY_PRESETS_COUNT 7    // Indices 0–6 are read-only, always loaded from firmware
 
 // Preset data structure — pulse parameters only.
 // S delay and auto_mode are device-level user preferences, NOT per-preset.
@@ -281,8 +282,8 @@ typedef struct {
 // ============================================================================
 #define FW_VERSION_MAJOR     1
 #define FW_VERSION_MINOR     0
-#define FW_VERSION_PATCH     0
-#define FW_VERSION_STRING    "1.0.0"
+#define FW_VERSION_PATCH     4
+#define FW_VERSION_STRING    "1.0.4"
 #define FW_BUILD_DATE        __DATE__
 #define FW_BUILD_TIME        __TIME__
 

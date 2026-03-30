@@ -30,7 +30,7 @@ static bool s_dirty = false;
 // Auto-clamp: P1 ≤ P2, P3 ≤ P2, P4 ≤ P3
 static const weld_preset_t factory_presets[MAX_PRESETS] = {
     { "0.1mm Nickel",     3.0f, 20.0f,  5.0f,  0.0f, 0.0f },  // 0
-    { "0.15mm Nickel",    5.0f, 20.0f,  8.0f,  0.0f, 0.0f },  // 1
+    { "0.15mm Nickel",    6.0f, 22.0f, 10.0f,  0.0f, 0.0f },  // 1
     { "0.2mm Nickel",     8.0f, 25.0f, 12.0f,  0.0f, 0.0f },  // 2
     { "0.3mm Nickel",    12.0f, 30.0f, 18.0f,  0.0f, 0.0f },  // 3
     { "0.5mm Nickel",    18.0f, 35.0f, 25.0f,  0.0f, 0.0f },  // 4
@@ -139,7 +139,12 @@ static void settings_load_from_nvs(void)
     }
 
     // Load presets
-    for (int i = 0; i < MAX_PRESETS; i++) {
+    // Factory presets (0–6): ALWAYS from firmware code — ensures FW updates take effect
+    for (int i = 0; i < FACTORY_PRESETS_COUNT; i++) {
+        memcpy(&g_settings.presets[i], &factory_presets[i], sizeof(weld_preset_t));
+    }
+    // User-custom presets (7–19): load from NVS, fall back to defaults
+    for (int i = FACTORY_PRESETS_COUNT; i < MAX_PRESETS; i++) {
         char key[16];
         snprintf(key, sizeof(key), "preset%d", i);
         size_t blob_size = sizeof(weld_preset_t);
@@ -187,7 +192,8 @@ static void settings_write_to_nvs(void)
     nvs_set_str(s_nvs_handle, "bleName", g_settings.ble_name);
     nvs_set_str(s_nvs_handle, "pin", g_settings.pin);
 
-    for (int i = 0; i < MAX_PRESETS; i++) {
+    // Only persist user-custom presets (7–19) — factory presets live in firmware
+    for (int i = FACTORY_PRESETS_COUNT; i < MAX_PRESETS; i++) {
         char key[16];
         snprintf(key, sizeof(key), "preset%d", i);
         nvs_set_blob(s_nvs_handle, key, &g_settings.presets[i], sizeof(weld_preset_t));
@@ -407,6 +413,12 @@ void settings_save_preset(uint8_t index, const char *name,
                           float p3, float p4)
 {
     if (index >= MAX_PRESETS) return;
+    // Factory presets (0–6) are read-only — reject writes
+    if (index < FACTORY_PRESETS_COUNT) {
+        ESP_LOGW(TAG, "Cannot overwrite factory preset %d ('%s')",
+                 index, g_settings.presets[index].name);
+        return;
+    }
     weld_preset_t *p = &g_settings.presets[index];
     strncpy(p->name, name, PRESET_NAME_LEN - 1);
     p->name[PRESET_NAME_LEN - 1] = '\0';

@@ -155,6 +155,11 @@ bool ui_stub_is_dirty(void)
     return s_dirty && !s_paused;
 }
 
+bool ui_stub_is_ota_active(void)
+{
+    return s_ota_overlay;
+}
+
 // ============================================================================
 // UI interface implementations — cache only, NO I2C writes
 // ============================================================================
@@ -174,7 +179,7 @@ void ui_task(void *pvParameters) {
 
 void ui_update_voltage(float voltage) {
     s_voltage = voltage;
-    s_dirty = true;
+    if (!s_ota_overlay) s_dirty = true;  // Don't trigger redraw during OTA
 }
 
 void ui_update_protection(float voltage) {
@@ -183,13 +188,13 @@ void ui_update_protection(float voltage) {
 
 void ui_update_weld_state(uint8_t state) {
     s_weld_state = state;
-    s_dirty = true;
+    if (!s_ota_overlay) s_dirty = true;
 }
 
 void ui_update_weld_count(uint32_t session, uint32_t total) {
     s_session = session;
     s_total   = total;
-    s_dirty = true;
+    if (!s_ota_overlay) s_dirty = true;
 }
 
 void ui_graph_add_point(float voltage) {

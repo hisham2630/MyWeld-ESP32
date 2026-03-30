@@ -123,6 +123,8 @@ void ui_hide_ota_progress(void);
 void ui_stub_refresh_display(void);
 /** Returns true if any UI value has changed since last refresh. */
 bool ui_stub_is_dirty(void);
+/** Returns true if OTA overlay is active (lcd_update_task should skip normal rendering). */
+bool ui_stub_is_ota_active(void);
 #endif
 
 #endif // UI_H
