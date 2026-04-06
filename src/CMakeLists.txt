@@ -39,6 +39,7 @@ set(DISPLAY_SRCS
     "ui.c"
     "ui_stubs.c"
     "esp_lcd_axs15231b.c"
+    "esp_lcd_nv3041a.c"
     "esp_lcd_touch.c"
     "nextion.c"
     "lcd2004.c"

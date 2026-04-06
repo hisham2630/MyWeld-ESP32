@@ -1,0 +1,16 @@
+# MyWeld ESP32-S3 — JC4827W543 overrides (4MB flash)
+# This file is applied AFTER sdkconfig.defaults to override flash-specific settings.
+
+# --- Flash (4MB instead of 16MB) ---
+# CONFIG_ESPTOOLPY_FLASHSIZE_16MB is not set
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# --- Partition Table (4MB OTA layout) ---
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
+
+# --- PSRAM (same OPI PSRAM, 2MB on this board) ---
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y

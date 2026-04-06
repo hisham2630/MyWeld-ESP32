@@ -25,3 +25,7 @@ Schematic/__Previews/
 # OS
 .DS_Store
 Thumbs.db
+
+# Auto-generated sdkconfig files (committed via sdkconfig.defaults* only)
+sdkconfig.jc4827w543
+sdkconfig.jc3248w535

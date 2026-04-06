@@ -92,6 +92,28 @@ static QueueHandle_t s_ui_queue = NULL;
 #define COLOR_TEXT_DARK lv_color_hex(0x1A1A2E)
 
 // ============================================================================
+// Layout Constants (derived from display resolution)
+// ============================================================================
+
+#define UI_SCR_W        DISPLAY_WIDTH      // 480 on both boards
+#define UI_SCR_H        DISPLAY_HEIGHT     // 320 (JC3248W535) or 272 (JC4827W543)
+
+#define UI_TOPBAR_H     36
+#define UI_BOTBAR_H     44
+#define UI_BOTBAR_Y     (UI_SCR_H - UI_BOTBAR_H)       // 276 or 228
+#define UI_CONTENT_Y    (UI_TOPBAR_H + 6)                // 42
+#define UI_CONTENT_H    (UI_BOTBAR_Y - UI_CONTENT_Y)    // 234 or 186
+
+// Card height: 90px on 320-tall, 70px on 272-tall
+#if (UI_SCR_H >= 300)
+  #define UI_CARD_H     90
+#else
+  #define UI_CARD_H     70
+#endif
+#define UI_CARD_GAP     6
+#define UI_CARD_STRIDE  (UI_CARD_H + UI_CARD_GAP)        // 96 or 76
+
+// ============================================================================
 // Screen & Widget References
 // ============================================================================
 
@@ -541,7 +563,7 @@ static void create_param_card(lv_obj_t *parent, param_card_t *card,
 
   // Card container
   card->card = lv_obj_create(parent);
-  lv_obj_set_size(card->card, w, 90);
+  lv_obj_set_size(card->card, w, UI_CARD_H);
   lv_obj_set_pos(card->card, x, y);
   lv_obj_set_style_bg_color(card->card, COLOR_CARD_DARK, 0);
   lv_obj_set_style_border_color(card->card, COLOR_ACCENT, 0);
@@ -624,10 +646,10 @@ static void btn_mode_toggle_cb(lv_event_t *e) {
 /**
  * Recalculate dashboard card visibility and layout positions.
  *
- * Layout rules (480×320 display, status bar=36px at y=0, bottom bar=44px at y=276):
- *   Row 1 (y=42, h=90): P1, T, P2 — always visible in User Defined mode
- *   Row 2 (y=138, h=90): P3, P4   — visible only when value > 0 in UD mode
- *   S delay card: visible only in AUTO mode, positioned below the last param row
+ * Layout rules (status bar=36px at y=0, bottom bar at y=UI_BOTBAR_Y):
+ *   Row 1 (y=UI_CONTENT_Y, h=UI_CARD_H): P1, T, P2 — visible in User Defined mode
+ *   Row 2 (y=row1+stride): P3, P4 — visible only when value > 0 in UD mode
+ *   S delay card: visible only in AUTO mode, positioned below last param row
  *   Voltage bar and chart cascade below S (or below params if no S)
  *
  *   Preset mode: all pulse cards hidden, S/vbar/chart shift up
@@ -671,19 +693,19 @@ static void update_dashboard_layout(void) {
 
   // ── Cascading Y positions ──
   // Compute the next available Y position after the visible parameter rows
-  int next_y = 42;  // Start just below the status bar
+  int next_y = UI_CONTENT_Y;  // Start just below the status bar
 
   if (ud) {
-    next_y = 138;  // After Row 1 (y=42, h=90, gap=6)
+    next_y = UI_CONTENT_Y + UI_CARD_STRIDE;  // After Row 1
     if (p3_visible || p4_visible) {
-      next_y = 234;  // After Row 2 (y=138, h=90, gap=6)
+      next_y = UI_CONTENT_Y + UI_CARD_STRIDE * 2;  // After Row 2
     }
   }
 
   // S card position
   if (am && card_s.card) {
-    lv_obj_set_pos(card_s.card, 6, next_y);
-    next_y += 96;  // S card h=90 + gap=6
+    lv_obj_set_pos(card_s.card, UI_CARD_GAP, next_y);
+    next_y += UI_CARD_STRIDE;  // S card h + gap
   }
 
   // Voltage bar
@@ -694,11 +716,12 @@ static void update_dashboard_layout(void) {
 
   // Chart — show if there's enough vertical space (need ~80px before bottom bar at y=276)
   if (chart_voltage) {
-    if (next_y + 80 <= 276) {
+    int avail = UI_BOTBAR_Y - next_y - 4;
+    if (avail >= 40) {
       lv_obj_clear_flag(chart_voltage, LV_OBJ_FLAG_HIDDEN);
       lv_obj_set_pos(chart_voltage, 10, next_y);
-      int chart_h = 276 - next_y - 4;  // Dynamic height to fill available space
-      if (chart_h < 50) chart_h = 50;
+      int chart_h = avail;
+      if (chart_h < 40) chart_h = 40;
       if (chart_h > 120) chart_h = 120;
       lv_obj_set_height(chart_voltage, chart_h);
     } else {
@@ -723,7 +746,7 @@ static void create_main_screen(void) {
 
   // ── Status Bar (top) ─────────────────────────────
   lv_obj_t *status_bar = lv_obj_create(scr_main);
-  lv_obj_set_size(status_bar, 480, 36);
+  lv_obj_set_size(status_bar, UI_SCR_W, UI_TOPBAR_H);
   lv_obj_set_pos(status_bar, 0, 0);
   lv_obj_set_style_bg_color(status_bar, COLOR_CARD_DARK, 0);
   lv_obj_set_style_border_width(status_bar, 0, 0);
@@ -771,9 +794,9 @@ static void create_main_screen(void) {
 
 
   // ── Parameter Cards ──────────────────────────────
-  int card_y = 42;
+  int card_y = UI_CONTENT_Y;
   int card_w = 148;
-  int gap = 6;
+  int gap = UI_CARD_GAP;
 
   create_param_card(scr_main, &card_p1, "PULSE 1", &g_settings.p1, PULSE_MIN_MS,
                     PULSE_MAX_MS, PULSE_STEP_MS, "ms", gap, card_y, card_w);
@@ -787,7 +810,7 @@ static void create_main_screen(void) {
                     card_y, card_w);
 
   // ── Row 2: P3 (Forge) and P4 (Temper) — only shown when value > 0 ──
-  int row2_y = card_y + 96;  // 42 + 90 + 6 = 138
+  int row2_y = card_y + UI_CARD_STRIDE;
 
   create_param_card(scr_main, &card_p3, "FORGE", &g_settings.p3, PULSE_MIN_MS,
                     PULSE_MAX_MS, PULSE_STEP_MS, "ms", gap, row2_y, card_w);
@@ -876,8 +899,8 @@ static void create_main_screen(void) {
 
   // ── Bottom Status Bar ────────────────────────────
   lv_obj_t *bottom_bar = lv_obj_create(scr_main);
-  lv_obj_set_size(bottom_bar, 480, 44);
-  lv_obj_set_pos(bottom_bar, 0, 276);
+  lv_obj_set_size(bottom_bar, UI_SCR_W, UI_BOTBAR_H);
+  lv_obj_set_pos(bottom_bar, 0, UI_BOTBAR_Y);
   lv_obj_set_style_bg_color(bottom_bar, COLOR_CARD_DARK, 0);
   lv_obj_set_style_border_width(bottom_bar, 0, 0);
   lv_obj_set_style_radius(bottom_bar, 0, 0);
@@ -1022,7 +1045,11 @@ static void create_settings_screen(void) {
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 2);
 
   int row_y = 45;
+#if (UI_SCR_H >= 300)
   int row_h = 40;
+#else
+  int row_h = 34;  // Tighter rows for 272px display
+#endif
 
   // ── Preset Selector ──────────────────────────────
   lv_obj_t *lbl_preset_s = lv_label_create(scr_settings);

@@ -3,18 +3,13 @@
 #if HAS_LVGL
 
 /**
- * Display Module — esp_lcd + AXS15231B QSPI + LVGL 9.x
- * Board: JC3248W535 (AXS15231B QSPI display + AXS15231B I2C touch)
+ * Display Module — esp_lcd QSPI + LVGL 9.x
  *
- * Architecture follows the official JC3248W535EN reference BSP:
- *   - NON-BLOCKING flush_cb: draw_bitmap() is fired and returns immediately.
- *   - The SPI on_color_trans_done ISR calls lv_display_flush_ready() directly.
- *   - trans_queue_depth = 10, matching the reference AXS15231B_PANEL_IO_QSPI_CONFIG.
- *   - SPI mode 3 (CPOL=1, CPHA=1) — confirmed by AXS15231B_PANEL_IO_QSPI_CONFIG macro.
- *   - RGB565_SWAPPED: LVGL on little-endian ESP32 stores pixels LSB-first;
- *     the display expects big-endian, so we ask LVGL to swap before DMA.
- *   - Display kept in native portrait (320×480) hardware, LVGL renders in
- *     landscape (480×320) using hardware MADCTL swap_xy + mirror.
+ * JC3248W535: AXS15231B 320×480 portrait → 90° SW rotation → 480×320 landscape
+ * JC4827W543: NV3041A   480×272 native landscape → direct flush (no rotation)
+ *
+ * Common: QSPI bus (CS=45, SCK=47, D0=21, D1=48, D2=40, D3=39), SPI mode 3,
+ *         non-blocking flush via DMA, RGB565_SWAPPED color format.
  */
 
 #include <stdio.h>
@@ -29,7 +24,11 @@
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+#include "esp_lcd_nv3041a.h"
+#else
 #include "esp_lcd_axs15231b.h"
+#endif
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
@@ -48,18 +47,28 @@ static const char *TAG = "Display";
 // ============================================================================
 
 #define QSPI_HOST   SPI2_HOST
-#define LCD_H_RES   320          // physical panel width  (portrait native)
-#define LCD_V_RES   480          // physical panel height (portrait native)
 #define LCD_BPP     16
 #define LCD_LEDC_CH 1
 
-// Logical landscape dimensions used by LVGL
-#define DISP_HOR_RES 480
-#define DISP_VER_RES 320
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+  // NV3041A: native 480×272 landscape — no rotation needed
+  #define LCD_H_RES    480
+  #define LCD_V_RES    272
+  #define DISP_HOR_RES 480
+  #define DISP_VER_RES 272
+#else
+  // AXS15231B: native 320×480 portrait, rotated to landscape by SW
+  #define LCD_H_RES    320
+  #define LCD_V_RES    480
+  #define DISP_HOR_RES 480
+  #define DISP_VER_RES 320
+#endif
 
 // ============================================================================
-// AXS15231B Initialization Commands (from official JC3248W535EN reference BSP)
+// Init Commands — board-specific
 // ============================================================================
+#if (BOARD_VARIANT != BOARD_JC4827W543)
+// AXS15231B Initialization Commands (from official JC3248W535EN reference BSP)
 static const axs15231b_lcd_init_cmd_t lcd_init_cmds[] = {
     {0xBB, (uint8_t[]){0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5A, 0xA5}, 8, 0},
     {0xA0,
@@ -162,24 +171,14 @@ static const axs15231b_lcd_init_cmd_t lcd_init_cmds[] = {
      (uint8_t[]){0x37, 0x07, 0x12, 0x18, 0x0E, 0x0D, 0x17, 0x39, 0x44, 0x2E,
                  0x0C, 0x14, 0x14, 0x36, 0x3A, 0x2F, 0x0F},
      17, 0},
-    // 0xA4 MUST be sent twice: first the full 16-byte analog-voltage trim,
-    // then the 4-byte override/lock. Both entries exist in the official
-    // JC3248W535EN reference esp_bsp.c (lines 61-62). Omitting the 16-byte
-    // write leaves the panel power stage uninitialized → black screen.
     {0xA4, (uint8_t[]){0x85, 0x85, 0x95, 0x82, 0xAF, 0xAA, 0xAA, 0x80,
                         0x10, 0x30, 0x40, 0x40, 0x20, 0xFF, 0x60, 0x30}, 16, 0},
     {0xA4, (uint8_t[]){0x85, 0x85, 0x95, 0x85}, 4, 0},
     {0xBB, (uint8_t[]){0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 8, 0},
     {0x13, (uint8_t[]){0x00}, 0, 0},
-    // NOTE: 0x11 (SLPOUT) is intentionally omitted here.
-    // panel_axs15231b_init() already sends SLPOUT + 100ms before executing
-    // this table. A second SLPOUT while awake causes the AXS15231B to enter
-    // an undefined state (black screen).
-    // NOTE: 0x29 (Display ON) is sent separately by esp_lcd_panel_disp_on_off()
-    // AFTER swap_xy + mirror set the correct MADCTL. Sending it here would turn
-    // the panel on before rotation is configured.
     {0x2C, (uint8_t[]){0x00, 0x00, 0x00, 0x00}, 4, 0},
 };
+#endif // !BOARD_JC4827W543
 
 // ============================================================================
 // Static state
@@ -201,44 +200,65 @@ static lv_display_t *s_disp = NULL;
 // element type — NEVER lv_color_t — to get correct sizeof and pointer math.
 static uint16_t *buf1 = NULL;
 
-// Rotation DMA buffer — allocated from DMA-capable internal SRAM.
-// Holds one strip of ROT_STRIP_W landscape columns rotated to portrait rows.
-// Size = ROT_STRIP_W × LCD_H_RES uint16_t elements = 48 × 320 × 2 = 30 720 B.
-// MUST be DMA-capable: QSPI DMA reads directly from this pointer.
-// MUST NOT be in PSRAM — QSPI DMA cannot access external (PSRAM) memory.
+#if (BOARD_VARIANT != BOARD_JC4827W543)
+// Rotation DMA buffer — AXS15231B only (portrait→landscape SW rotation)
 #define ROT_STRIP_W 48
 static uint16_t *s_rot_buf = NULL;
+#endif
 
-// Semaphore to synchronise strip DMA completion.
-// ISR gives it after each esp_lcd_panel_draw_bitmap, flush loop takes it before
-// overwriting s_rot_buf with the next strip, preventing a DMA race condition.
+// Semaphore to synchronise DMA completion.
 static SemaphoreHandle_t s_trans_sem = NULL;
 
 // ============================================================================
-// LVGL Flush — Manual 90° CW Software Rotation (mirrors reference lv_port.c)
-//
-// LVGL renders a 480×320 landscape frame into buf1.
-// flush_cb receives the full landscape area (0,0,479,319).
-//
-// We replicate the reference approach exactly:
-//   - Divide the 480 landscape columns into strips of ROT_STRIP_W columns.
-//   - For each strip: rotate pixels 90° CW into s_rot_buf (portrait row-major).
-//   - Send the portrait strip to the panel with physical portrait coordinates.
-//
-// 90° CW rotation formula (reference lv_port.c, case LV_DISP_ROT_90):
-//   portrait[x][LCD_H_RES - 1 - y] = landscape[y][x_col]
-//   where landscape height = LCD_H_RES = 320, landscape width = LCD_V_RES = 480
-//
-// Physical portrait coords for strip at landscape cols [c0 .. c1]:
-//   CASET (physical cols): 0 to LCD_H_RES-1  (0..319)
-//   RASET (physical rows): c0 to c1
-//
-// DMA synchronisation:
-//   draw_bitmap launches an async SPI DMA transfer that reads from s_rot_buf.
-//   Before overwriting s_rot_buf for the NEXT strip we must wait until the
-//   PREVIOUS DMA is done — otherwise we corrupt the in-flight transfer.
-//   panel_trans_done_cb (ISR) gives s_trans_sem; flush loop takes it first.
+// LVGL Flush Callback
 // ============================================================================
+
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+// ---- JC4827W543: Direct flush (NV3041A native 480×272 landscape) ----
+// No rotation needed — LVGL landscape matches panel native orientation.
+
+static bool panel_trans_done_cb(esp_lcd_panel_io_handle_t io,
+                                esp_lcd_panel_io_event_data_t *edata,
+                                void *user_ctx) {
+  BaseType_t woken = pdFALSE;
+  xSemaphoreGiveFromISR(s_trans_sem, &woken);
+  return (woken == pdTRUE);
+}
+
+static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area,
+                          uint8_t *px_map) {
+  esp_lcd_panel_handle_t panel = lv_display_get_user_data(disp);
+
+  // NV3041A native landscape: send pixels directly, no rotation.
+  int x1 = area->x1, y1 = area->y1;
+  int x2 = area->x2 + 1, y2 = area->y2 + 1;
+
+  esp_lcd_panel_draw_bitmap(panel, x1, y1, x2, y2, px_map);
+
+  // Wait for DMA to complete before signaling LVGL.
+  xSemaphoreTake(s_trans_sem, portMAX_DELAY);
+  lv_display_flush_ready(disp);
+}
+
+static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
+  uint16_t touch_x[1], touch_y[1], touch_strength[1];
+  uint8_t touch_cnt = 0;
+
+  esp_lcd_touch_read_data(s_touch_handle);
+  bool pressed = esp_lcd_touch_get_coordinates(
+      s_touch_handle, touch_x, touch_y, touch_strength, &touch_cnt, 1);
+
+  if (pressed && touch_cnt > 0) {
+    data->point.x = touch_x[0];
+    data->point.y = touch_y[0];
+    data->state   = LV_INDEV_STATE_PRESSED;
+  } else {
+    data->state = LV_INDEV_STATE_RELEASED;
+  }
+}
+
+#else // AXS15231B (JC3248W535)
+// ---- JC3248W535: 90° CW Software Rotation (portrait→landscape) ----
 
 static bool panel_trans_done_cb(esp_lcd_panel_io_handle_t io,
                                 esp_lcd_panel_io_event_data_t *edata,
@@ -258,55 +278,36 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area,
 
   const int x1 = area->x1;
   const int x2 = area->x2;
-  // px_map contains 16-bit RGB565_SWAPPED pixels. Cast to uint16_t* — NOT
-  // lv_color_t* (which is 3 bytes in LVGL 9.x and would give wrong offsets).
   const uint16_t *src = (const uint16_t *)px_map;
 
   bool first_strip = true;
 
-  // Process one strip of ROT_STRIP_W landscape columns at a time.
   for (int cx = x1; cx <= x2; cx += ROT_STRIP_W) {
     int strip_w = (cx + ROT_STRIP_W <= x2 + 1) ? ROT_STRIP_W : (x2 - cx + 1);
 
-    // Wait for the PREVIOUS strip's DMA transfer to complete before we
-    // overwrite s_rot_buf (skip on the very first strip — nothing in flight).
     if (!first_strip) {
       xSemaphoreTake(s_trans_sem, portMAX_DELAY);
     }
     first_strip = false;
 
-    // Rotate: landscape (col=cx+x, row=y) → portrait buffer
-    // 90° CW: portrait[x][pt_w-1-y] = landscape[y][cx+x]
-    // Buffer index: x * pt_w + (pt_w - 1 - y)
     for (int y = 0; y < ls_h; y++) {
       for (int x = 0; x < strip_w; x++) {
         s_rot_buf[x * pt_w + (pt_w - 1 - y)] = src[y * ls_w + (cx + x)];
       }
     }
 
-    // Physical portrait coordinates for this strip:
-    //   CASET (columns): 0 .. pt_w-1     (= 0..319)
-    //   RASET (rows):    cx .. cx+strip_w-1
     esp_lcd_panel_draw_bitmap(panel,
-                              0,    cx,            // x_start, y_start
-                              pt_w, cx + strip_w,  // x_end+1, y_end+1
+                              0,    cx,
+                              pt_w, cx + strip_w,
                               s_rot_buf);
   }
 
-  // Wait for the last strip's DMA to complete before returning.
-  // This is required: LVGL may immediately begin the next frame render
-  // (dirtying buf1) once we call flush_ready. If the last DMA is still
-  // in-flight and still reading s_rot_buf, we must not recycle it yet.
   xSemaphoreTake(s_trans_sem, portMAX_DELAY);
-
-  // Signal LVGL that flush is complete — it can now render the next frame.
   lv_display_flush_ready(disp);
 }
 
 static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
-  uint16_t touch_x[1];
-  uint16_t touch_y[1];
-  uint16_t touch_strength[1];
+  uint16_t touch_x[1], touch_y[1], touch_strength[1];
   uint8_t touch_cnt = 0;
 
   // AXS15231B returns I2C NACK when idle (no finger) — normal, suppress it.
@@ -316,10 +317,10 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     return;
   }
 
-  bool touchpad_pressed = esp_lcd_touch_get_coordinates(
+  bool pressed = esp_lcd_touch_get_coordinates(
       s_touch_handle, touch_x, touch_y, touch_strength, &touch_cnt, 1);
 
-  if (touchpad_pressed && touch_cnt > 0) {
+  if (pressed && touch_cnt > 0) {
     data->point.x = touch_x[0];
     data->point.y = touch_y[0];
     data->state   = LV_INDEV_STATE_PRESSED;
@@ -327,24 +328,18 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     data->state = LV_INDEV_STATE_RELEASED;
   }
 }
+#endif // BOARD_VARIANT
 
 // ============================================================================
 // Display Driver Initialization
 // ============================================================================
 
+#if (BOARD_VARIANT != BOARD_JC4827W543)
+// AXS15231B touch: portrait→landscape coordinate rotation
 static void touch_process_coordinates(esp_lcd_touch_handle_t tp, uint16_t *x,
                                       uint16_t *y, uint16_t *strength,
                                       uint8_t *point_num,
                                       uint8_t max_point_num) {
-  // Raw touch: portrait space (x: 0..319, y: 0..479)
-  // LVGL expects: landscape space (x: 0..479, y: 0..319)
-  //
-  // 90° CW rotation inverse (portrait → landscape):
-  //   landscape_x = portrait_y
-  //   landscape_y = LCD_H_RES - 1 - portrait_x  (= 319 - portrait_x)
-  //
-  // This is the same transform the reference lv_port.c applies for ROT_90
-  // in bsp_touch_process_points_cb (esp_bsp.c line 421-425).
   for (int i = 0; i < *point_num; i++) {
     uint16_t px = x[i];
     uint16_t py = y[i];
@@ -353,6 +348,7 @@ static void touch_process_coordinates(esp_lcd_touch_handle_t tp, uint16_t *x,
   }
   (void)tp; (void)strength; (void)max_point_num;
 }
+#endif
 
 static void start_backlight(void) {
   ledc_timer_config_t bl_timer = {
@@ -377,7 +373,7 @@ static void start_backlight(void) {
 }
 
 void display_init(void) {
-  ESP_LOGI(TAG, "Initializing SPI bus for AXS15231B (QSPI, SPI mode 3)...");
+  ESP_LOGI(TAG, "Initializing QSPI display (%s)...", BOARD_NAME_STRING);
 
   // ── 1. SPI/QSPI Bus ────────────────────────────────────────────────────────
   spi_bus_config_t buscfg = {
@@ -408,6 +404,21 @@ void display_init(void) {
       (esp_lcd_spi_bus_handle_t)QSPI_HOST, &io_config, &s_io_handle));
 
   // ── 3. Panel device ────────────────────────────────────────────────────────
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+  nv3041a_vendor_config_t vendor_config = {
+      .init_cmds      = NULL,  // use built-in NV3041A default init
+      .init_cmds_size = 0,
+      .flags = { .use_qspi_interface = 1 },
+  };
+  esp_lcd_panel_dev_config_t panel_config = {
+      .reset_gpio_num  = -1,
+      .rgb_ele_order   = LCD_RGB_ELEMENT_ORDER_RGB,
+      .bits_per_pixel  = LCD_BPP,
+      .vendor_config   = (void *)&vendor_config,
+  };
+  ESP_ERROR_CHECK(
+      esp_lcd_new_panel_nv3041a(s_io_handle, &panel_config, &s_panel_handle));
+#else
   axs15231b_vendor_config_t vendor_config = {
       .init_cmds      = lcd_init_cmds,
       .init_cmds_size = sizeof(lcd_init_cmds) / sizeof(lcd_init_cmds[0]),
@@ -421,46 +432,46 @@ void display_init(void) {
   };
   ESP_ERROR_CHECK(
       esp_lcd_new_panel_axs15231b(s_io_handle, &panel_config, &s_panel_handle));
+#endif
 
   // ── 4. Reset & hardware init ───────────────────────────────────────────────
   esp_lcd_panel_reset(s_panel_handle);
   esp_lcd_panel_init(s_panel_handle);
-
-  // NO hardware MADCTL rotation.
-  // Hardware swap_xy (MADCTL MV) requires the host to stream pixels in
-  // column-major order, but LVGL always streams in row-major order.
-  // Combining hardware MV with LVGL row-major data produces the garbage
-  // visible below the top strip of the display.
-  // Rotation is handled entirely by LVGL software (lv_display_set_rotation)
-  // which rotates the full frame buffer BEFORE calling flush_cb, so the
-  // driver always receives correct portrait-ordered data.
-
-  // Turn display ON (esp_lcd_panel_disp_on_off with false = DISPON).
   esp_lcd_panel_disp_on_off(s_panel_handle, false);
   vTaskDelay(pdMS_TO_TICKS(20));
 
   // ── 5. Backlight ───────────────────────────────────────────────────────────
-  // Configure LEDC but keep duty = 0 (backlight OFF).
-  // display_enable_backlight() is called by ui_task() AFTER the first LVGL
-  // frame is flushed, so the user never sees GRAM garbage through the backlight.
   start_backlight();
-  // DO NOT call display_set_brightness() here — backlight stays dark.
 
   // ── 6. I2C & Touch ─────────────────────────────────────────────────────────
   i2c_config_t i2c_conf = {
       .mode             = I2C_MODE_MASTER,
       .sda_io_num       = PIN_TOUCH_SDA,
-      .sda_pullup_en    = GPIO_PULLUP_DISABLE, // board has hardware pull-ups
+      .sda_pullup_en    = GPIO_PULLUP_DISABLE,
       .scl_io_num       = PIN_TOUCH_SCL,
       .scl_pullup_en    = GPIO_PULLUP_DISABLE,
-      .master.clk_speed = 800000,  // 800 kHz fast-mode+ — reduces read latency
+      .master.clk_speed = 400000,
   };
   i2c_param_config(I2C_NUM_0, &i2c_conf);
   i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0);
 
   esp_lcd_panel_io_handle_t tp_io_handle = NULL;
-  esp_lcd_panel_io_i2c_config_t tp_io_config =
-      ESP_LCD_TOUCH_IO_I2C_AXS15231B_CONFIG();
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+  esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+  esp_lcd_new_panel_io_i2c(
+      (esp_lcd_i2c_bus_handle_t)I2C_NUM_0, &tp_io_config, &tp_io_handle);
+
+  esp_lcd_touch_config_t tp_cfg = {
+      .x_max              = LCD_H_RES,
+      .y_max              = LCD_V_RES,
+      .rst_gpio_num       = PIN_TOUCH_RST,
+      .int_gpio_num       = PIN_TOUCH_INT,
+      .levels             = { .reset = 0, .interrupt = 0 },
+      .flags              = { .swap_xy = 0, .mirror_x = 0, .mirror_y = 0 },
+  };
+  esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, &s_touch_handle);
+#else
+  esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_AXS15231B_CONFIG();
   esp_lcd_new_panel_io_i2c(
       (esp_lcd_i2c_bus_handle_t)I2C_NUM_0, &tp_io_config, &tp_io_handle);
 
@@ -474,6 +485,7 @@ void display_init(void) {
       .flags              = { .swap_xy = 0, .mirror_x = 0, .mirror_y = 0 },
   };
   esp_lcd_touch_new_i2c_axs15231b(tp_io_handle, &tp_cfg, &s_touch_handle);
+#endif
 
   // ── 7. LVGL init ───────────────────────────────────────────────────────────
   lv_init();
@@ -484,15 +496,13 @@ void display_init(void) {
   s_trans_sem = xSemaphoreCreateCounting(1, 0);
   ESP_ERROR_CHECK(s_trans_sem == NULL ? ESP_ERR_NO_MEM : ESP_OK);
 
-  // Rotation buffer: DMA-capable internal SRAM (QSPI DMA cannot use PSRAM).
-  // uint16_t element (2 bytes) because format is RGB565_SWAPPED.
-  // Total: 48 × 320 × 2 = 30 720 bytes.
+#if (BOARD_VARIANT != BOARD_JC4827W543)
+  // AXS15231B rotation buffer: DMA-capable internal SRAM
   s_rot_buf = (uint16_t *)heap_caps_malloc(
       ROT_STRIP_W * LCD_H_RES * sizeof(uint16_t),
       MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
   ESP_ERROR_CHECK(s_rot_buf == NULL ? ESP_ERR_NO_MEM : ESP_OK);
-
-  // Full-frame SPIRAM draw buffer — 480×320 pixels × 2 bytes (RGB565).
+#endif
   // Use uint16_t sizing: lv_color_t in LVGL 9.x is 3 bytes (RGB888 struct);
   // using sizeof(lv_color_t) here would allocate 50% more memory than needed
   // AND lv_display_set_buffers would report the wrong pixel count to LVGL.
@@ -542,7 +552,11 @@ void display_init(void) {
   // being silently eaten by the scroll detector.
   lv_indev_set_scroll_limit(indev, 5);
 
-  ESP_LOGI(TAG, "Display initialized: 480x320 landscape LVGL, 90 CW SW-rotation to 320x480 portrait panel");
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+  ESP_LOGI(TAG, "Display initialized: %dx%d native landscape (NV3041A + GT911)", DISP_HOR_RES, DISP_VER_RES);
+#else
+  ESP_LOGI(TAG, "Display initialized: %dx%d landscape, 90 CW SW-rotation (AXS15231B)", DISP_HOR_RES, DISP_VER_RES);
+#endif
 }
 
 // ============================================================================

@@ -8,7 +8,7 @@
  * Build defines expected from platformio.ini:
  *   -DDISPLAY_TYPE=<n>   (1=QSPI TFT, 2=Nextion, 3=LCD 20×4, 4=COG 128×64)
  *   -DAUDIO_TYPE=<n>     (1=I2S, 2=LEDC Buzzer)
- *   -DBOARD_VARIANT=<n>  (1=JC3248W535, 2=DevKit, 3=GOOUUU CAM)
+ *   -DBOARD_VARIANT=<n>  (1=JC3248W535, 2=DevKit, 3=GOOUUU CAM, 4=JC4827W543)
  */
 
 #ifndef BOARD_CONFIG_H
@@ -34,6 +34,7 @@
 #define BOARD_JC3248W535      1  // Guition JC3248W535 all-in-one (display+touch+speaker)
 #define BOARD_DEVKIT           2  // Generic ESP32-S3 N16R8 DevKit-C
 #define BOARD_GOOUUU_CAM       3  // GOOUUU ESP32-S3-CAM N16R8 (camera NOT connected)
+#define BOARD_JC4827W543       4  // Guition JC4827W543 4.3" 480×272 (NV3041A+GT911+speaker)
 
 // ============================================================================
 // Defaults (if not set by platformio.ini — fallback to current board)
@@ -238,6 +239,8 @@
 // ============================================================================
 #if (BOARD_VARIANT == BOARD_JC3248W535)
   #define BOARD_NAME_STRING   "JC3248W535 (Guition)"
+#elif (BOARD_VARIANT == BOARD_JC4827W543)
+  #define BOARD_NAME_STRING   "JC4827W543 (Guition 4.3\")"
 #elif (BOARD_VARIANT == BOARD_GOOUUU_CAM)
   #if (DISPLAY_TYPE == DISPLAY_NEXTION)
     #define BOARD_NAME_STRING "GOOUUU CAM + Nextion"
@@ -263,12 +266,12 @@
 // ============================================================================
 // Validation
 // ============================================================================
-#if (DISPLAY_TYPE == DISPLAY_QSPI_TFT) && (BOARD_VARIANT != BOARD_JC3248W535)
-  #error "QSPI TFT display is only available on the JC3248W535 board"
+#if (DISPLAY_TYPE == DISPLAY_QSPI_TFT) && (BOARD_VARIANT != BOARD_JC3248W535) && (BOARD_VARIANT != BOARD_JC4827W543)
+  #error "QSPI TFT display is only available on JC3248W535 or JC4827W543 boards"
 #endif
 
-#if (DISPLAY_TYPE == DISPLAY_COG_12864) && (BOARD_VARIANT == BOARD_JC3248W535)
-  #error "COG 128x64 display is not supported on JC3248W535 (uses QSPI TFT)"
+#if (DISPLAY_TYPE == DISPLAY_COG_12864) && ((BOARD_VARIANT == BOARD_JC3248W535) || (BOARD_VARIANT == BOARD_JC4827W543))
+  #error "COG 128x64 display is not supported on QSPI TFT boards"
 #endif
 
 #if (BOARD_VARIANT == BOARD_GOOUUU_CAM) && (AUDIO_TYPE == AUDIO_I2S)

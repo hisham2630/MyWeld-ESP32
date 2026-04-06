@@ -3,18 +3,18 @@
 
 /**
  * MyWeld ESP32-S3 — Hardware Configuration
- * Board: JC3248W535 (Guition ESP32-S3, AXS15231B display)
+ * Boards: JC3248W535 (Guition, AXS15231B 480×320)
+ *         JC4827W543 (Guition, NV3041A  480×272)
  * 
  * Original MyWeld V2.0 PRO designed by Aka Kasyan (YouTube)
  * https://www.youtube.com/@akakasyan
  * This project is an ESP32-S3 adaptation of his original Arduino Nano design.
  * Thank you Aka Kasyan for the inspiration and the excellent welding logic!
  * 
- * All pin assignments VERIFIED from:
- *   - Official JC3248W535 GPIO割当表 (2025/02/01)
- *   - Board schematic (JC3248W535 V1.0, 深圳市晶彩智能有限公司)
+ * Pin assignments verified from official schematics and GPIO tables.
  */
 
+#include "board_config.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -56,10 +56,22 @@
 #define PIN_LCD_D2      GPIO_NUM_40
 #define PIN_LCD_D3      GPIO_NUM_39
 
-// --- Touch I2C (from schematic: IO8=TP_SCL, IO4=TP_SDA) ---
-#define PIN_TOUCH_SCL   GPIO_NUM_8   // SCL — confirmed from reference esp_bsp.h
-#define PIN_TOUCH_SDA   GPIO_NUM_4   // SDA — confirmed from reference esp_bsp.h
-#define TOUCH_I2C_ADDR  0x3B
+// --- Touch I2C ---
+// JC3248W535: IO8=SCL, IO4=SDA, AXS15231B at 0x3B
+// JC4827W543: IO4=SCL, IO8=SDA, GT911 at 0x5D (pins are swapped!)
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+  #define PIN_TOUCH_SCL   GPIO_NUM_4   // SCL (from JC4827W543 schematic)
+  #define PIN_TOUCH_SDA   GPIO_NUM_8   // SDA (from JC4827W543 schematic)
+  #define TOUCH_I2C_ADDR  0x5D         // GT911 address (INT=LOW during reset)
+  #define PIN_TOUCH_RST   GPIO_NUM_38  // GT911 reset pin
+  #define PIN_TOUCH_INT   GPIO_NUM_3   // GT911 interrupt pin
+#else
+  #define PIN_TOUCH_SCL   GPIO_NUM_8   // SCL — confirmed from reference esp_bsp.h
+  #define PIN_TOUCH_SDA   GPIO_NUM_4   // SDA — confirmed from reference esp_bsp.h
+  #define TOUCH_I2C_ADDR  0x3B         // AXS15231B touch address
+  #define PIN_TOUCH_RST   GPIO_NUM_NC  // No dedicated reset
+  #define PIN_TOUCH_INT   GPIO_NUM_NC  // No dedicated interrupt
+#endif
 
 // --- I2S Audio (built-in amplifier → speaker on P6) ---
 // Defaults for JC3248W535; board_config.h may override for DevKit variants
@@ -93,8 +105,13 @@
 // ============================================================================
 // Display Configuration
 // ============================================================================
-#define DISPLAY_WIDTH   480
-#define DISPLAY_HEIGHT  320
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+  #define DISPLAY_WIDTH   480  // NV3041A native landscape
+  #define DISPLAY_HEIGHT  272
+#else
+  #define DISPLAY_WIDTH   480  // AXS15231B rotated to landscape
+  #define DISPLAY_HEIGHT  320
+#endif
 
 // ============================================================================
 // ADC Configuration
@@ -282,8 +299,8 @@ typedef struct {
 // ============================================================================
 #define FW_VERSION_MAJOR     1
 #define FW_VERSION_MINOR     0
-#define FW_VERSION_PATCH     4
-#define FW_VERSION_STRING    "1.0.4"
+#define FW_VERSION_PATCH     19
+#define FW_VERSION_STRING    "1.0.19"
 #define FW_BUILD_DATE        __DATE__
 #define FW_BUILD_TIME        __TIME__
 
