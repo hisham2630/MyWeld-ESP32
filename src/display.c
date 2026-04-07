@@ -204,6 +204,12 @@ static uint16_t *buf1 = NULL;
 // Rotation DMA buffer — AXS15231B only (portrait→landscape SW rotation)
 #define ROT_STRIP_W 48
 static uint16_t *s_rot_buf = NULL;
+#else
+// NV3041A: Two draw buffers in internal DMA SRAM — double-buffered,
+// non-blocking flush.  LVGL renders into one buffer while DMA transfers
+// the other.  Zero-copy, no PSRAM, no memcpy.
+#define LINES_PER_BUF 34   // 480 × 34 × 2 = 32 640 bytes per buffer
+static uint16_t *buf2 = NULL;
 #endif
 
 // Semaphore to synchronise DMA completion.
@@ -229,14 +235,17 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area,
                           uint8_t *px_map) {
   esp_lcd_panel_handle_t panel = lv_display_get_user_data(disp);
 
-  // NV3041A native landscape: send pixels directly, no rotation.
-  int x1 = area->x1, y1 = area->y1;
-  int x2 = area->x2 + 1, y2 = area->y2 + 1;
-
-  esp_lcd_panel_draw_bitmap(panel, x1, y1, x2, y2, px_map);
-
-  // Wait for DMA to complete before signaling LVGL.
+  // Double-buffered non-blocking flush:
+  // Wait for the PREVIOUS DMA transfer to complete (protects the buffer
+  // LVGL is about to start rendering into next).
   xSemaphoreTake(s_trans_sem, portMAX_DELAY);
+
+  // Start DMA for the current buffer — asynchronous.
+  esp_lcd_panel_draw_bitmap(panel, area->x1, area->y1,
+                            area->x2 + 1, area->y2 + 1, px_map);
+
+  // Tell LVGL this buffer is "done" — it can immediately start rendering
+  // into the OTHER buffer while DMA transfers this one.
   lv_display_flush_ready(disp);
 }
 
@@ -248,14 +257,31 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
   bool pressed = esp_lcd_touch_get_coordinates(
       s_touch_handle, touch_x, touch_y, touch_strength, &touch_cnt, 1);
 
+  static bool s_was_pressed = false;
+  static int  s_press_polls = 0;
+  static int  s_log_cnt = 0;
+
   if (pressed && touch_cnt > 0) {
     data->point.x = touch_x[0];
     data->point.y = touch_y[0];
     data->state   = LV_INDEV_STATE_PRESSED;
+    s_press_polls++;
+    if (!s_was_pressed && s_log_cnt < 30) {
+      s_log_cnt++;
+      ESP_LOGI(TAG, "TOUCH DOWN: x=%d y=%d", touch_x[0], touch_y[0]);
+    }
+    s_was_pressed = true;
   } else {
     data->state = LV_INDEV_STATE_RELEASED;
+    if (s_was_pressed && s_log_cnt < 30) {
+      s_log_cnt++;
+      ESP_LOGI(TAG, "TOUCH UP: after %d polls", s_press_polls);
+    }
+    s_was_pressed = false;
+    s_press_polls = 0;
   }
 }
+
 
 #else // AXS15231B (JC3248W535)
 // ---- JC3248W535: 90° CW Software Rotation (portrait→landscape) ----
@@ -382,19 +408,32 @@ void display_init(void) {
       .data1_io_num    = PIN_LCD_D1,
       .data2_io_num    = PIN_LCD_D2,
       .data3_io_num    = PIN_LCD_D3,
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+      .max_transfer_sz = DISP_HOR_RES * LINES_PER_BUF * sizeof(uint16_t),
+#else
       .max_transfer_sz = DISP_HOR_RES * DISP_VER_RES * sizeof(uint16_t),
+#endif
   };
   ESP_ERROR_CHECK(spi_bus_initialize(QSPI_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
-  // ── 2. Panel IO ────────────────────────────────────────────────────────────
-  // SPI mode 3 (CPOL=1, CPHA=1): confirmed by the official reference macro
-  // AXS15231B_PANEL_IO_QSPI_CONFIG in esp_lcd_axs15231b.h.
+  // SPI mode:
+  //   AXS15231B (JC3248W535): Mode 3 (CPOL=1, CPHA=1) — confirmed by official
+  //   reference macro AXS15231B_PANEL_IO_QSPI_CONFIG.
+  //   NV3041A   (JC4827W543): Mode 0 (CPOL=0, CPHA=0) — per NV3041A datasheet
+  //   AC characteristics; using Mode 3 causes data bits to be sampled on the
+  //   wrong clock edge, producing random pixel corruption (noisy pixels).
   // trans_queue_depth=10 matches the reference (not 1).
   esp_lcd_panel_io_spi_config_t io_config = {
       .cs_gpio_num        = PIN_LCD_CS,
       .dc_gpio_num        = -1,
-      .spi_mode           = 3,
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+      .spi_mode           = 0,  // NV3041A: Mode 0 (CPOL=0, CPHA=0)
+      .pclk_hz            = 32 * 1000 * 1000,  // 32 MHz — 40 MHz causes bit-flip
+                                                // noise on this board's QSPI traces
+#else
+      .spi_mode           = 3,  // AXS15231B: Mode 3 (CPOL=1, CPHA=1)
       .pclk_hz            = 40 * 1000 * 1000,
+#endif
       .trans_queue_depth  = 10,
       .lcd_cmd_bits       = 32,
       .lcd_param_bits     = 8,
@@ -440,6 +479,7 @@ void display_init(void) {
   esp_lcd_panel_disp_on_off(s_panel_handle, false);
   vTaskDelay(pdMS_TO_TICKS(20));
 
+
   // ── 5. Backlight ───────────────────────────────────────────────────────────
   start_backlight();
 
@@ -467,7 +507,7 @@ void display_init(void) {
       .rst_gpio_num       = PIN_TOUCH_RST,
       .int_gpio_num       = PIN_TOUCH_INT,
       .levels             = { .reset = 0, .interrupt = 0 },
-      .flags              = { .swap_xy = 0, .mirror_x = 0, .mirror_y = 0 },
+      .flags              = { .swap_xy = 0, .mirror_x = 1, .mirror_y = 1 },
   };
   esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, &s_touch_handle);
 #else
@@ -491,32 +531,52 @@ void display_init(void) {
   lv_init();
   s_lvgl_mutex = xSemaphoreCreateMutex();
 
-  // DMA semaphore — starts at 0 (unclaimed). ISR gives it on each DMA done.
-  // Max count = 1: we always wait for one completion at a time.
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+  // DMA semaphore — starts at 1 ("hot") for the non-blocking double-buffer
+  // flush pattern: flush_cb takes BEFORE starting DMA, so the first flush
+  // must succeed immediately.
+  s_trans_sem = xSemaphoreCreateCounting(1, 1);
+#else
+  // AXS15231B: starts at 0 (cold). Flush callback skips the first take.
   s_trans_sem = xSemaphoreCreateCounting(1, 0);
+#endif
   ESP_ERROR_CHECK(s_trans_sem == NULL ? ESP_ERR_NO_MEM : ESP_OK);
 
-#if (BOARD_VARIANT != BOARD_JC4827W543)
-  // AXS15231B rotation buffer: DMA-capable internal SRAM
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+  // NV3041A: Double-buffered LVGL draw buffers in internal DMA SRAM.
+  // LVGL renders into one buffer while DMA transfers the other.
+  {
+    size_t buf_size = DISP_HOR_RES * LINES_PER_BUF * sizeof(uint16_t);
+    buf1 = (uint16_t *)heap_caps_malloc(buf_size,
+                                        MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    buf2 = (uint16_t *)heap_caps_malloc(buf_size,
+                                        MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    ESP_ERROR_CHECK(buf1 == NULL ? ESP_ERR_NO_MEM : ESP_OK);
+    ESP_ERROR_CHECK(buf2 == NULL ? ESP_ERR_NO_MEM : ESP_OK);
+    ESP_LOGI(TAG, "LVGL double-buffer: 2 × %u bytes in internal DMA SRAM",
+             (unsigned)buf_size);
+    s_disp = lv_display_create(DISP_HOR_RES, DISP_VER_RES);
+    lv_display_set_flush_cb(s_disp, lvgl_flush_cb);
+    lv_display_set_buffers(s_disp, buf1, buf2, buf_size,
+                           LV_DISPLAY_RENDER_MODE_PARTIAL);
+  }
+#else
+  // AXS15231B: rotation buffer + full-frame PSRAM buffer.
   s_rot_buf = (uint16_t *)heap_caps_malloc(
       ROT_STRIP_W * LCD_H_RES * sizeof(uint16_t),
       MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
   ESP_ERROR_CHECK(s_rot_buf == NULL ? ESP_ERR_NO_MEM : ESP_OK);
+  {
+    size_t buf_size = DISP_HOR_RES * DISP_VER_RES * sizeof(uint16_t);
+    buf1 = (uint16_t *)heap_caps_malloc(buf_size,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    ESP_ERROR_CHECK(buf1 == NULL ? ESP_ERR_NO_MEM : ESP_OK);
+    s_disp = lv_display_create(DISP_HOR_RES, DISP_VER_RES);
+    lv_display_set_flush_cb(s_disp, lvgl_flush_cb);
+    lv_display_set_buffers(s_disp, buf1, NULL, buf_size,
+                           LV_DISPLAY_RENDER_MODE_FULL);
+  }
 #endif
-  // Use uint16_t sizing: lv_color_t in LVGL 9.x is 3 bytes (RGB888 struct);
-  // using sizeof(lv_color_t) here would allocate 50% more memory than needed
-  // AND lv_display_set_buffers would report the wrong pixel count to LVGL.
-  size_t buf_size = DISP_HOR_RES * DISP_VER_RES * sizeof(uint16_t);
-  buf1 = (uint16_t *)heap_caps_malloc(buf_size,
-                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  ESP_ERROR_CHECK(buf1 == NULL ? ESP_ERR_NO_MEM : ESP_OK);
-
-  // LVGL sees a 480×320 landscape display. No lv_display_set_rotation().
-  // Rotation is handled entirely in lvgl_flush_cb (manual SW rotation).
-  s_disp = lv_display_create(DISP_HOR_RES, DISP_VER_RES);
-  lv_display_set_flush_cb(s_disp, lvgl_flush_cb);
-  lv_display_set_buffers(s_disp, buf1, NULL, buf_size,
-                         LV_DISPLAY_RENDER_MODE_FULL);
   lv_display_set_user_data(s_disp, s_panel_handle);
 
   // RGB565 byte-swap so LVGL's little-endian buffer matches the panel.
@@ -527,6 +587,36 @@ void display_init(void) {
       .on_color_trans_done = panel_trans_done_cb,
   };
   esp_lcd_panel_io_register_event_callbacks(s_io_handle, &cbs, NULL);
+
+  // ── 7b. Clear GRAM to black — eliminate power-on pixel noise ──────────────
+  // Must happen AFTER s_trans_sem + DMA callback are registered, so we can
+  // properly synchronise SPI completion.  Uses the DMA-capable band/rot buffer.
+  {
+#if (BOARD_VARIANT == BOARD_JC4827W543)
+    memset(buf1, 0, DISP_HOR_RES * LINES_PER_BUF * sizeof(uint16_t));
+    for (int row = 0; row < DISP_VER_RES; row += LINES_PER_BUF) {
+      int band_end = (row + LINES_PER_BUF < DISP_VER_RES) ? (row + LINES_PER_BUF) : DISP_VER_RES;
+      xSemaphoreTake(s_trans_sem, portMAX_DELAY);  // first iter uses initial count=1
+      esp_lcd_panel_draw_bitmap(s_panel_handle, 0, row,
+                                DISP_HOR_RES, band_end, buf1);
+    }
+    xSemaphoreTake(s_trans_sem, portMAX_DELAY);  // wait for last band
+    xSemaphoreGive(s_trans_sem);                 // re-prime for LVGL flush
+#else
+    memset(s_rot_buf, 0, ROT_STRIP_W * LCD_H_RES * sizeof(uint16_t));
+    bool first = true;
+    for (int col = 0; col < LCD_V_RES; col += ROT_STRIP_W) {
+      int strip_end = (col + ROT_STRIP_W < LCD_V_RES) ? (col + ROT_STRIP_W) : LCD_V_RES;
+      int strip_w = strip_end - col;
+      if (!first) xSemaphoreTake(s_trans_sem, portMAX_DELAY);
+      first = false;
+      esp_lcd_panel_draw_bitmap(s_panel_handle, 0, col,
+                                LCD_H_RES, col + strip_w, s_rot_buf);
+    }
+    xSemaphoreTake(s_trans_sem, portMAX_DELAY);
+#endif
+    ESP_LOGI(TAG, "GRAM cleared to black");
+  }
 
   // Touch input device
   lv_indev_t *indev = lv_indev_create();

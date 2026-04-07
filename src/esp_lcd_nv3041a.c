@@ -47,6 +47,12 @@ static const char *TAG = "lcd_panel.nv3041a";
 #define GT911_POINT_SIZE      8     /* bytes per touch point */
 #define GT911_MAX_TOUCH       1     /* we only need single-touch */
 
+/* GT911 configuration registers */
+#define GT911_REG_PRODUCT_ID  0x8140
+#define GT911_REG_CONFIG      0x8047  /* config block start */
+#define GT911_CONFIG_SIZE     185     /* 0x8047..0x80FF inclusive */
+#define GT911_CHKSUM_LEN      183     /* checksum covers 0x8047..0x80FD */
+
 /* ========================================================================= */
 /* NV3041A Panel Driver                                                       */
 /* ========================================================================= */
@@ -484,6 +490,71 @@ esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io,
     /* Reset controller — also sets I2C address via INT pin state */
     ESP_GOTO_ON_ERROR(touch_gt911_reset(gt911), err, TAG, "GT911 reset failed");
 
+    /* Verify I2C communication and configure resolution */
+    {
+        esp_lcd_panel_io_handle_t io = gt911->io;
+
+        /* 1. Read Product ID (registers 0x8140-0x8143) */
+        uint8_t pid[4] = {0};
+        ret = esp_lcd_panel_io_rx_param(io, GT911_REG_PRODUCT_ID, pid, 4);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "GT911: I2C product ID read FAILED — check wiring");
+            goto err;
+        }
+        ESP_LOGI(TAG, "GT911 product: %c%c%c%c", pid[0], pid[1], pid[2], pid[3]);
+
+        /* 2. Read current config header (version, X_max, Y_max, touch_num) */
+        uint8_t hdr[6] = {0};
+        ret = esp_lcd_panel_io_rx_param(io, GT911_REG_CONFIG, hdr, sizeof(hdr));
+        uint16_t cur_x = hdr[1] | (hdr[2] << 8);
+        uint16_t cur_y = hdr[3] | (hdr[4] << 8);
+        ESP_LOGI(TAG, "GT911 cfg: ver=0x%02X, res=%dx%d, touches=%d",
+                 hdr[0], cur_x, cur_y, hdr[5]);
+
+        uint16_t want_x = config->x_max;
+        uint16_t want_y = config->y_max;
+
+        /* 3. Write config if resolution doesn't match */
+        if (cur_x != want_x || cur_y != want_y || hdr[5] == 0) {
+            ESP_LOGW(TAG, "GT911: resolution mismatch (%dx%d != %dx%d), writing config...",
+                     cur_x, cur_y, want_x, want_y);
+
+            /* Read full config as base */
+            uint8_t cfg[GT911_CONFIG_SIZE];
+            memset(cfg, 0, sizeof(cfg));
+            esp_lcd_panel_io_rx_param(io, GT911_REG_CONFIG, cfg, GT911_CHKSUM_LEN);
+
+            /* Patch header */
+            if (cfg[0] == 0 || cfg[0] == 0xFF) cfg[0] = 0x60;
+            else cfg[0] += 1;              /* bump version to force reload */
+            cfg[1] = want_x & 0xFF;        /* X_Output_Max low */
+            cfg[2] = want_x >> 8;          /* X_Output_Max high */
+            cfg[3] = want_y & 0xFF;        /* Y_Output_Max low */
+            cfg[4] = want_y >> 8;          /* Y_Output_Max high */
+            cfg[5] = GT911_MAX_TOUCH;      /* Touch_Number */
+            if (cfg[6] == 0 || cfg[6] == 0xFF) cfg[6] = 0x05; /* INT rising edge */
+
+            /* Checksum: complement-of-sum + 1 over bytes 0..182 */
+            uint8_t sum = 0;
+            for (int i = 0; i < GT911_CHKSUM_LEN; i++) sum += cfg[i];
+            cfg[GT911_CHKSUM_LEN]     = (~sum) + 1;   /* 0x80FE */
+            cfg[GT911_CHKSUM_LEN + 1] = 1;             /* 0x80FF config_fresh */
+
+            ret = esp_lcd_panel_io_tx_param(io, GT911_REG_CONFIG,
+                                            cfg, GT911_CONFIG_SIZE);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "GT911: config write failed");
+            } else {
+                ESP_LOGI(TAG, "GT911 config written (%dx%d, %d pt)",
+                         want_x, want_y, GT911_MAX_TOUCH);
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
+        } else {
+            ESP_LOGI(TAG, "GT911 config OK");
+        }
+        ret = ESP_OK;
+    }
+
     *tp = gt911;
     ESP_LOGI(TAG, "GT911 touch initialized (addr 0x%02X)",
              ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
@@ -539,24 +610,28 @@ static esp_err_t touch_gt911_reset(esp_lcd_touch_handle_t tp) {
 }
 
 static esp_err_t touch_gt911_read_data(esp_lcd_touch_handle_t tp) {
+    static int s_err_cnt = 0;
     uint8_t status = 0;
     uint8_t point_data[GT911_POINT_SIZE];
 
     /* Read status register (0x814E) */
     esp_err_t ret = esp_lcd_panel_io_rx_param(tp->io, GT911_REG_STATUS, &status, 1);
     if (ret != ESP_OK) {
+        if (++s_err_cnt <= 3 || s_err_cnt % 500 == 0)
+            ESP_LOGE(TAG, "GT911: status read failed (%d)", s_err_cnt);
         return ret;
     }
+    s_err_cnt = 0;
 
-    /* Check buffer ready flag (bit 7) */
+    /* No new data from GT911 — keep previous touch state */
     if (!(status & 0x80)) {
-        return ESP_OK;  /* No new data */
+        return ESP_OK;
     }
 
     uint8_t num_points = status & 0x0F;
 
-    if (num_points > 0 && num_points <= GT911_MAX_TOUCH) {
-        /* Read point data (0x8150) */
+    if (num_points > 0) {
+        /* Finger(s) touching — read first point data (0x8150) */
         ret = esp_lcd_panel_io_rx_param(tp->io, GT911_REG_POINT_BASE,
                                          point_data, GT911_POINT_SIZE);
         if (ret != ESP_OK) {
@@ -565,10 +640,14 @@ static esp_err_t touch_gt911_read_data(esp_lcd_touch_handle_t tp) {
 
         portENTER_CRITICAL(&tp->data.lock);
         tp->data.points = 1;
-        /* GT911 point format: x_lo, x_hi, y_lo, y_hi, size_lo, size_hi, -, - */
         tp->data.coords[0].x = point_data[0] | (point_data[1] << 8);
         tp->data.coords[0].y = point_data[2] | (point_data[3] << 8);
         tp->data.coords[0].strength = point_data[4] | (point_data[5] << 8);
+        portEXIT_CRITICAL(&tp->data.lock);
+    } else {
+        /* GT911 explicitly reports no touch (finger lifted) */
+        portENTER_CRITICAL(&tp->data.lock);
+        tp->data.points = 0;
         portEXIT_CRITICAL(&tp->data.lock);
     }
 
@@ -594,7 +673,9 @@ static bool touch_gt911_get_xy(esp_lcd_touch_handle_t tp, uint16_t *x,
             strength[i] = tp->data.coords[i].strength;
         }
     }
-    tp->data.points = 0;
+    /* Do NOT clear tp->data.points here — let read_data manage state.
+     * GT911 updates at ~8Hz while LVGL polls at 100Hz. Clearing here
+     * would cause LVGL to see RELEASED for 11/12 polls, breaking clicks. */
     portEXIT_CRITICAL(&tp->data.lock);
 
     return (*point_num > 0);

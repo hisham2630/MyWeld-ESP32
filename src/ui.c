@@ -98,20 +98,22 @@ static QueueHandle_t s_ui_queue = NULL;
 #define UI_SCR_W        DISPLAY_WIDTH      // 480 on both boards
 #define UI_SCR_H        DISPLAY_HEIGHT     // 320 (JC3248W535) or 272 (JC4827W543)
 
-#define UI_TOPBAR_H     36
-#define UI_BOTBAR_H     44
-#define UI_BOTBAR_Y     (UI_SCR_H - UI_BOTBAR_H)       // 276 or 228
-#define UI_CONTENT_Y    (UI_TOPBAR_H + 6)                // 42
-#define UI_CONTENT_H    (UI_BOTBAR_Y - UI_CONTENT_Y)    // 234 or 186
-
-// Card height: 90px on 320-tall, 70px on 272-tall
+// Board-adaptive sizing: JC4827W543 (272px) gets slimmer bars to maximise card space
 #if (UI_SCR_H >= 300)
+  #define UI_TOPBAR_H   36
+  #define UI_BOTBAR_H   44
   #define UI_CARD_H     90
 #else
-  #define UI_CARD_H     70
+  #define UI_TOPBAR_H   28
+  #define UI_BOTBAR_H   30
+  #define UI_CARD_H     90
 #endif
+#define UI_BOTBAR_Y     (UI_SCR_H - UI_BOTBAR_H)       // 276 or 242
+#define UI_CONTENT_Y    (UI_TOPBAR_H + 4)                // 40 or 32
+#define UI_CONTENT_H    (UI_BOTBAR_Y - UI_CONTENT_Y)    // 236 or 210
+
 #define UI_CARD_GAP     6
-#define UI_CARD_STRIDE  (UI_CARD_H + UI_CARD_GAP)        // 96 or 76
+#define UI_CARD_STRIDE  (UI_CARD_H + UI_CARD_GAP)        // 96 or 86
 
 // ============================================================================
 // Screen & Widget References
@@ -527,8 +529,7 @@ static void param_btn_cb(lv_event_t *e) {
   param_card_t *card = (param_card_t *)lv_event_get_user_data(e);
   lv_obj_t *target = lv_event_get_target(e);
 
-  if (target == card->btn_plus || target == card->card) {
-    // Tapping the card body acts like "+" for easy touch
+  if (target == card->btn_plus) {
     *card->value_ptr += card->step;
     if (*card->value_ptr > card->max_val)
       *card->value_ptr = card->max_val;
@@ -571,9 +572,6 @@ static void create_param_card(lv_obj_t *parent, param_card_t *card,
   lv_obj_set_style_radius(card->card, 12, 0);
   lv_obj_set_style_pad_all(card->card, 6, 0);
   lv_obj_clear_flag(card->card, LV_OBJ_FLAG_SCROLLABLE);
-  // Make the card body itself clickable for easy touch response
-  lv_obj_add_flag(card->card, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(card->card, param_btn_cb, LV_EVENT_CLICKED, card);
 
   // Parameter name
   card->label_name = lv_label_create(card->card);
@@ -708,21 +706,31 @@ static void update_dashboard_layout(void) {
     next_y += UI_CARD_STRIDE;  // S card h + gap
   }
 
-  // Voltage bar
+  // Voltage bar — compact on 272-tall screens
+  // Position at current next_y, then advance. Avoids lv_obj_get_height()
+  // which in LVGL 9.x may return stale coords before layout recalculation.
   if (volt_container) {
+#if (UI_SCR_H >= 300)
+    lv_obj_set_size(volt_container, 460, 40);
     lv_obj_set_pos(volt_container, 10, next_y);
     next_y += 46;  // vbar h=40 + gap=6
+#else
+    lv_obj_set_size(volt_container, 460, 28);
+    lv_obj_set_pos(volt_container, 10, next_y);
+    next_y += 34;  // vbar h=28 + gap=6
+#endif
   }
 
-  // Chart — show if there's enough vertical space (need ~80px before bottom bar at y=276)
+  // Chart — show if there's enough vertical space
   if (chart_voltage) {
     int avail = UI_BOTBAR_Y - next_y - 4;
-    if (avail >= 40) {
+    int chart_max = (UI_SCR_H >= 300) ? 120 : 50;
+    if (avail >= 36) {
       lv_obj_clear_flag(chart_voltage, LV_OBJ_FLAG_HIDDEN);
       lv_obj_set_pos(chart_voltage, 10, next_y);
       int chart_h = avail;
-      if (chart_h < 40) chart_h = 40;
-      if (chart_h > 120) chart_h = 120;
+      if (chart_h < 36) chart_h = 36;
+      if (chart_h > chart_max) chart_h = chart_max;
       lv_obj_set_height(chart_voltage, chart_h);
     } else {
       lv_obj_add_flag(chart_voltage, LV_OBJ_FLAG_HIDDEN);
@@ -758,7 +766,11 @@ static void create_main_screen(void) {
   lv_obj_t *lbl_title = lv_label_create(status_bar);
   lv_label_set_text(lbl_title, LV_SYMBOL_CHARGE " MyWeld");
   lv_obj_set_style_text_color(lbl_title, COLOR_PRIMARY, 0);
+#if (UI_SCR_H >= 300)
   lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_16, 0);
+#else
+  lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_14, 0);
+#endif
   lv_obj_align(lbl_title, LV_ALIGN_LEFT_MID, 0, 0);
 
   // Preset name (or "User Defined")
@@ -778,7 +790,11 @@ static void create_main_screen(void) {
   lv_label_set_text(lbl_mode, g_settings.auto_mode ? "AUTO" : "MAN");
   lv_obj_set_style_text_color(
       lbl_mode, g_settings.auto_mode ? COLOR_BLUE : COLOR_GREEN, 0);
+#if (UI_SCR_H >= 300)
   lv_obj_set_style_text_font(lbl_mode, &lv_font_montserrat_16, 0);
+#else
+  lv_obj_set_style_text_font(lbl_mode, &lv_font_montserrat_14, 0);
+#endif
   lv_obj_align(lbl_mode, LV_ALIGN_RIGHT_MID, -5, 0);
   lv_obj_add_flag(lbl_mode, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(lbl_mode, btn_mode_toggle_cb, LV_EVENT_CLICKED, NULL);
@@ -787,8 +803,13 @@ static void create_main_screen(void) {
   lbl_ble_icon = lv_label_create(status_bar);
   lv_label_set_text(lbl_ble_icon, LV_SYMBOL_BLUETOOTH);
   lv_obj_set_style_text_color(lbl_ble_icon, COLOR_BLUE, 0);
+#if (UI_SCR_H >= 300)
   lv_obj_set_style_text_font(lbl_ble_icon, &lv_font_montserrat_16, 0);
   lv_obj_align(lbl_ble_icon, LV_ALIGN_RIGHT_MID, -58, 0);
+#else
+  lv_obj_set_style_text_font(lbl_ble_icon, &lv_font_montserrat_14, 0);
+  lv_obj_align(lbl_ble_icon, LV_ALIGN_RIGHT_MID, -50, 0);
+#endif
   lv_obj_add_flag(lbl_ble_icon, LV_OBJ_FLAG_HIDDEN);
 
 
@@ -832,16 +853,25 @@ static void create_main_screen(void) {
   int vbar_y = 142;
 
   volt_container = lv_obj_create(scr_main);
+#if (UI_SCR_H >= 300)
   lv_obj_set_size(volt_container, 460, 40);
+#else
+  lv_obj_set_size(volt_container, 460, 28);
+#endif
   lv_obj_set_pos(volt_container, 10, vbar_y);
   lv_obj_set_style_bg_color(volt_container, COLOR_CARD_DARK, 0);
+  lv_obj_set_style_bg_opa(volt_container, LV_OPA_COVER, 0);  // Prevent transparency bleed-through
   lv_obj_set_style_border_width(volt_container, 0, 0);
   lv_obj_set_style_radius(volt_container, 10, 0);
   lv_obj_set_style_pad_all(volt_container, 4, 0);
   lv_obj_clear_flag(volt_container, LV_OBJ_FLAG_SCROLLABLE);
 
   bar_voltage = lv_bar_create(volt_container);
+#if (UI_SCR_H >= 300)
   lv_obj_set_size(bar_voltage, 320, 20);
+#else
+  lv_obj_set_size(bar_voltage, 320, 14);
+#endif
   lv_obj_align(bar_voltage, LV_ALIGN_LEFT_MID, 4, 0);
   lv_bar_set_range(bar_voltage, 0, 100);
   lv_bar_set_value(bar_voltage, 0, LV_ANIM_OFF);
@@ -853,27 +883,46 @@ static void create_main_screen(void) {
   lbl_voltage = lv_label_create(volt_container);
   lv_label_set_text(lbl_voltage, "0.0V");
   lv_obj_set_style_text_color(lbl_voltage, COLOR_TEXT_LIGHT, 0);
+#if (UI_SCR_H >= 300)
   lv_obj_set_style_text_font(lbl_voltage, &lv_font_montserrat_20, 0);
   lv_obj_align(lbl_voltage, LV_ALIGN_RIGHT_MID, -4, -6);
+#else
+  // 28px container: place voltage and percent side by side (single line)
+  // Pct label sits at x=-4 and is ~30px wide (font_12 "100%"), so voltage
+  // needs x <= -(4+30+6gap) = -40 to avoid touching.
+  lv_obj_set_style_text_font(lbl_voltage, &lv_font_montserrat_14, 0);
+  lv_obj_align(lbl_voltage, LV_ALIGN_RIGHT_MID, -44, 0);
+#endif
 
   lbl_voltage_pct = lv_label_create(volt_container);
   lv_label_set_text(lbl_voltage_pct, "0%");
   lv_obj_set_style_text_color(lbl_voltage_pct, COLOR_TEXT_DIM, 0);
+#if (UI_SCR_H >= 300)
   lv_obj_set_style_text_font(lbl_voltage_pct, &lv_font_montserrat_14, 0);
   lv_obj_align(lbl_voltage_pct, LV_ALIGN_RIGHT_MID, -4, 10);
+#else
+  lv_obj_set_style_text_font(lbl_voltage_pct, &lv_font_montserrat_12, 0);
+  lv_obj_align(lbl_voltage_pct, LV_ALIGN_RIGHT_MID, -4, 0);
+#endif
 
   // Charger status icon (thunder bolt = charging, X = not charging)
   lbl_charger_icon = lv_label_create(volt_container);
   lv_label_set_text(lbl_charger_icon, LV_SYMBOL_CHARGE);
   lv_obj_set_style_text_color(lbl_charger_icon, COLOR_YELLOW, 0);
+#if (UI_SCR_H >= 300)
   lv_obj_set_style_text_font(lbl_charger_icon, &lv_font_montserrat_20, 0);
   lv_obj_align(lbl_charger_icon, LV_ALIGN_LEFT_MID, 330, 0);
+#else
+  lv_obj_set_style_text_font(lbl_charger_icon, &lv_font_montserrat_14, 0);
+  lv_obj_align(lbl_charger_icon, LV_ALIGN_LEFT_MID, 330, 0);
+#endif
 
   // ── Voltage Chart ────────────────────────────────
   chart_voltage = lv_chart_create(scr_main);
   lv_obj_set_size(chart_voltage, 460, 80);
   lv_obj_set_pos(chart_voltage, 10, 185);
   lv_obj_set_style_bg_color(chart_voltage, COLOR_CARD_DARK, 0);
+  lv_obj_set_style_bg_opa(chart_voltage, LV_OPA_COVER, 0);  // Prevent transparency bleed-through
   lv_obj_set_style_border_color(chart_voltage, COLOR_ACCENT, 0);
   lv_obj_set_style_border_width(chart_voltage, 1, 0);
   lv_obj_set_style_radius(chart_voltage, 10, 0);
@@ -897,6 +946,13 @@ static void create_main_screen(void) {
   // Re-apply now that chart_voltage exists.
   update_dashboard_layout();
 
+  // Ensure voltage bar draws ON TOP of the chart — in LVGL, later-created
+  // siblings are drawn on top.  chart_voltage was created after volt_container,
+  // so without this the chart would overdraw the voltage bar when they overlap.
+  if (volt_container) {
+    lv_obj_move_foreground(volt_container);
+  }
+
   // ── Bottom Status Bar ────────────────────────────
   lv_obj_t *bottom_bar = lv_obj_create(scr_main);
   lv_obj_set_size(bottom_bar, UI_SCR_W, UI_BOTBAR_H);
@@ -913,19 +969,31 @@ static void create_main_screen(void) {
                         (unsigned long)g_settings.session_welds,
                         (unsigned long)g_settings.total_welds);
   lv_obj_set_style_text_color(lbl_weld_count, COLOR_TEXT_DIM, 0);
+#if (UI_SCR_H >= 300)
   lv_obj_set_style_text_font(lbl_weld_count, &lv_font_montserrat_14, 0);
+#else
+  lv_obj_set_style_text_font(lbl_weld_count, &lv_font_montserrat_12, 0);
+#endif
   lv_obj_align(lbl_weld_count, LV_ALIGN_LEFT_MID, 0, 0);
 
   // Status indicator
   lbl_status = lv_label_create(bottom_bar);
   lv_label_set_text(lbl_status, LV_SYMBOL_OK " READY");
   lv_obj_set_style_text_color(lbl_status, COLOR_GREEN, 0);
+#if (UI_SCR_H >= 300)
   lv_obj_set_style_text_font(lbl_status, &lv_font_montserrat_16, 0);
+#else
+  lv_obj_set_style_text_font(lbl_status, &lv_font_montserrat_14, 0);
+#endif
   lv_obj_align(lbl_status, LV_ALIGN_CENTER, 0, 0);
 
   // Settings gear button
   s_btn_settings = lv_btn_create(bottom_bar);
+#if (UI_SCR_H >= 300)
   lv_obj_set_size(s_btn_settings, 40, 32);
+#else
+  lv_obj_set_size(s_btn_settings, 36, 22);
+#endif
   lv_obj_align(s_btn_settings, LV_ALIGN_RIGHT_MID, 0, 0);
   lv_obj_set_style_bg_color(s_btn_settings, COLOR_ACCENT, 0);
   lv_obj_set_style_radius(s_btn_settings, 8, 0);
