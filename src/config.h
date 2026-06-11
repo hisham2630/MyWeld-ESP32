@@ -130,11 +130,14 @@
 // Supercap Bank (2S2P, 3.0V 3000F per cell)
 // ============================================================================
 // Maximum charge voltage is now USER-CONFIGURABLE via settings.
-// All thresholds (full, warn, block) are derived automatically.
+// Full and warn thresholds are derived from max voltage; block is fixed (SUPERCAP_V_BLOCK).
 // Use settings_get_*() functions at runtime — see settings.h.
 #define SUPERCAP_V_DEFAULT   5.7f     // Factory default max charge voltage
 #define SUPERCAP_V_MIN       4.0f     // Configurable range: minimum
 #define SUPERCAP_V_MAX       12.0f    // Configurable range: maximum
+#define SUPERCAP_V_WEAK_WARN 5.0f     // Advisory: welds may be weak below this (still allowed)
+#define SUPERCAP_V_BLOCK     4.7f     // Fixed weld block threshold (welding disabled below)
+#define SUPERCAP_V_WEAK_HYST 0.2f     // Re-arm weak-weld voice after rising this far above weak warn
 #define SUPERCAP_V_STEP      0.01f    // Adjustment step (10mV precision)
 #define SUPERCAP_CAPACITY_F  3000.0f  // Bank capacitance in Farads
 
@@ -273,7 +276,7 @@ typedef struct {
 #define TASK_ADC_PRIORITY        3
 #define TASK_ADC_CORE            1      // Core 1: ADC sampling
 
-#define TASK_AUDIO_STACK_SIZE    4096
+#define TASK_AUDIO_STACK_SIZE    8192
 #define TASK_AUDIO_PRIORITY      2
 #define TASK_AUDIO_CORE          1      // Core 1: audio output
 
@@ -299,8 +302,8 @@ typedef struct {
 // ============================================================================
 #define FW_VERSION_MAJOR     1
 #define FW_VERSION_MINOR     0
-#define FW_VERSION_PATCH     52
-#define FW_VERSION_STRING    "1.0.52"
+#define FW_VERSION_PATCH     67
+#define FW_VERSION_STRING    "1.0.67"
 #define FW_BUILD_DATE        __DATE__
 #define FW_BUILD_TIME        __TIME__
 

@@ -61,11 +61,30 @@ void audio_play_error(void);
 void audio_play_contact(void);
 
 /**
- * BLE client connected welcome chime (D5→A5, soft ascending 2-note).
- * Low volume, brief — plays when a phone connects for the first time
- * or after re-authentication. Respects the sound-on setting.
+ * Boot/BLE spoken prompts (I2S: TTS PCM; buzzer: tone fallback).
+ */
+void audio_play_welcome(void);
+void audio_play_ready_to_pair(void);
+void audio_play_pairing(void);
+void audio_play_connected(void);
+
+/**
+ * BLE authenticated connect chime (D5→A5, soft ascending 2-note).
+ * Plays after successful PIN auth (with connected voice on I2S).
  */
 void audio_play_ble_connect(void);
+
+/**
+ * Spoken warning when supercap charge is too low to weld.
+ * I2S: plays embedded voice clip. Buzzer: falls back to error tones.
+ */
+void audio_play_low_charge_warning(void);
+
+/**
+ * Advisory when supercap voltage is low but welding is still allowed.
+ * I2S: embedded voice clip. Buzzer: short double beep.
+ */
+void audio_play_weak_weld_warning(void);
 
 /**
  * Check if audio is currently muted (from settings).

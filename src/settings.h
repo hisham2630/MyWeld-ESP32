@@ -136,10 +136,13 @@ float settings_get_max_voltage(void);
 /** "Fully charged" threshold — max - 0.2V (hysteresis for charger re-enable). */
 float settings_get_full_voltage(void);
 
-/** Low voltage warning — 70% of max. UI shows yellow. */
+/** Low voltage warning — weak-weld advisory (5.0 V on typical banks). UI shows yellow. */
 float settings_get_low_warn(void);
 
-/** Low voltage block — 50% of max. Welding disabled below this. */
+/** Weak-weld advisory threshold — voice warning, welding still allowed. */
+float settings_get_weak_warn(void);
+
+/** Low voltage block — fixed SUPERCAP_V_BLOCK (4.7 V). Welding disabled below this. */
 float settings_get_low_block(void);
 
 /** Contact detection threshold — based on max voltage and contact divider. */

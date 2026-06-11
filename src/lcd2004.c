@@ -6,9 +6,9 @@
  *
  * LCD Layout (4 rows × 20 cols):
  *   Row 0: "5.7V  ████████  95%"    ← Voltage + charge bar + percentage
- *   Row 1: "P1:05 T:00 P2:00    "   ← Pulse parameters
- *   Row 2: "P3:00 P4:00     AUTO"   ← More pulses + mode
- *   Row 3: ">>> READY <<<      B"   ← Status + BLE indicator
+ *   Row 1: " P1:05  T:00  P2:00"   ← Pulse parameters (> arrow = focused)
+ *   Row 2: " P3:00  P4:00 S:0.5"   ← More pulses + S delay
+ *   Row 3: "READY     AUTO UD B"   ← Status + Mode + Badge + BLE
  *
  * Wiring: SDA → GPIO8, SCL → GPIO9, VCC → 5V (USB VBUS), GND → GND
  *   Note: On DevKitC-1 with dual USB-C, 5V comes from the USB port (not COM port)
@@ -21,6 +21,8 @@
 #include "lcd2004.h"
 #include "config.h"
 #include "ui.h"
+#include "audio_hal.h"
+#include "boot_audio.h"
 #include "encoder.h"
 #include "settings.h"
 #include "audio.h"
@@ -75,24 +77,29 @@ typedef enum {
 #define LCD_FOCUS_MODE  6
 #define LCD_FOCUS_COUNT 7
 
-// Blink position: which row/col range to blank when blinking
+// Focus position metadata: arrow_col = column for '>' indicator
 typedef struct {
     uint8_t row;
-    uint8_t col;
-    uint8_t len;
+    uint8_t col;       // Start column of the value text
+    uint8_t len;       // Length of the value text
+    uint8_t arrow_col; // Column where '>' arrow is placed
     float   min_val;
     float   max_val;
     float   step;
 } lcd_focus_meta_t;
 
+//                                                          Arrow positions:
+// Row 1: " P1:05  T:00  P2:00"  -> arrows at col 0, 7, 13
+// Row 2: " P3:00  P4:00 S:0.5 " -> arrows at col 0, 7, 13
+// Row 3: "status    AUTO UD  B" -> arrow at col 9
 static const lcd_focus_meta_t s_focus_meta[LCD_FOCUS_COUNT] = {
-    {1,  0, 5, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P1: "P1:05"
-    {1,  6, 4, PAUSE_MIN_MS, PAUSE_MAX_MS, PAUSE_STEP_MS}, // T:  "T:00"
-    {1, 11, 5, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P2: "P2:00"
-    {2,  0, 5, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P3: "P3:00"
-    {2,  6, 5, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P4: "P4:00"
-    {2, 12, 5, S_VALUE_MIN,  S_VALUE_MAX,  S_VALUE_STEP},  // S:  "S:0.5"
-    {3, 10, 4, 0, 0, 0},                                   // MODE "AUTO"
+    {1,  1, 5,  0, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P1: ">P1:05"
+    {1,  8, 4,  7, PAUSE_MIN_MS, PAUSE_MAX_MS, PAUSE_STEP_MS}, // T:  ">T:00"
+    {1, 14, 5, 13, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P2: ">P2:00"
+    {2,  1, 5,  0, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P3: ">P3:00"
+    {2,  8, 5,  7, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P4: ">P4:00"
+    {2, 14, 5, 13, S_VALUE_MIN,  S_VALUE_MAX,  S_VALUE_STEP},  // S:  ">S:0.5"
+    {3, 10, 4,  9, 0, 0, 0},                                   // MODE ">AUTO"
 };
 
 static int            s_enc_focus = -1;       // -1 = no focus
@@ -289,6 +296,7 @@ static void lcd2004_show_splash(void) {
     // Phase 1: Welcome
     lcd2004_clear();
     lcd2004_center_row(1, SPLASH_MSG_WELCOME);
+    audio_play_welcome();
     vTaskDelay(pdMS_TO_TICKS(SPLASH_WELCOME_MS));
 
     // Phase 2: App name + version + credits
@@ -302,6 +310,7 @@ static void lcd2004_show_splash(void) {
 
     // Clear for dashboard
     lcd2004_clear();
+    boot_audio_on_splash_done();
 }
 
 void lcd2004_clear(void) {
@@ -422,13 +431,17 @@ static void lcd_handle_encoder(encoder_event_t evt) {
     }
 }
 
-// Blank the focused item's characters in a line buffer
-static void lcd_apply_blink(char *line, int row) {
-    if (s_blink_real < 0 || !s_blink_blank) return;
-    const lcd_focus_meta_t *m = &s_focus_meta[s_blink_real];
+// Place arrow indicator at the focused item's position in a line buffer
+// NAV mode = '>', EDIT mode = '*'
+static void lcd_apply_arrow(char *line, int row) {
+    if (s_enc_focus < 0) return;
+    int real = lcd_logical_to_real(s_enc_focus);
+    if (real < 0 || real >= LCD_FOCUS_COUNT) return;
+    const lcd_focus_meta_t *m = &s_focus_meta[real];
     if (m->row != (uint8_t)row) return;
-    for (int i = 0; i < m->len && (m->col + i) < 20; i++)
-        line[m->col + i] = ' ';
+    if (m->arrow_col < 20) {
+        line[m->arrow_col] = (s_enc_mode == LCD_ENC_EDIT) ? '*' : '>';
+    }
 }
 
 // Reset all blink state (called on screen transitions)
@@ -735,38 +748,45 @@ void display_hal_update(
             }
         }
 
-        // Blink preset name when focused in NAV mode
-        if (s_enc_focus == LCD_PR_FOCUS_PRESET
-                && s_enc_mode == LCD_ENC_NAV && s_blink_blank)
-            memset(line + 1, ' ', 18);
+        // Arrow indicator when preset name is focused
+        if (s_enc_focus == LCD_PR_FOCUS_PRESET) {
+            line[0] = (s_enc_mode == LCD_ENC_EDIT) ? '*' : '>';
+        }
         lcd2004_print_row(1, line);
 
         lcd2004_print_row(2, "                    ");
     } else {
         // ── UD Mode: Row 1 = P1/T/P2, Row 2 = P3/P4/S ──
-        snprintf(line, sizeof(line), "P1:%02.0f T:%02.0f P2:%02.0f",
+        // Leading space reserves col 0 for arrow; extra spaces at col 7,13 for arrows
+        snprintf(line, sizeof(line), " P1:%02.0f  T:%02.0f  P2:%02.0f",
                  p1_ms, t_ms, p2_ms);
-        lcd_apply_blink(line, 1);
+        lcd_apply_arrow(line, 1);
         lcd2004_print_row(1, line);
 
-        snprintf(line, sizeof(line), "P3:%02.0f P4:%02.0f S:%.1f",
-                 p3_ms, p4_ms, s_delay);
-        lcd_apply_blink(line, 2);
+        if (auto_mode) {
+            snprintf(line, sizeof(line), " P3:%02.0f  P4:%02.0f S:%.1f",
+                     p3_ms, p4_ms, s_delay);
+        } else {
+            snprintf(line, sizeof(line), " P3:%02.0f  P4:%02.0f",
+                     p3_ms, p4_ms);
+        }
+        lcd_apply_arrow(line, 2);
         lcd2004_print_row(2, line);
     }
 
     // Row 3: Status + Mode + UD/PR Badge + BLE indicator
-    snprintf(line, sizeof(line), "%-10.10s%4s %2s %c",
+    snprintf(line, sizeof(line), "%-9.9s %4s %2s %c",
              status_text, auto_mode ? "AUTO" : " MAN",
              is_pr ? "PR" : "UD",
              ble_connected ? 'B' : ' ');
     if (is_pr) {
-        // PR blink on MODE area (col 10-13)
-        if (s_enc_focus == LCD_PR_FOCUS_MODE
-                && s_enc_mode == LCD_ENC_NAV && s_blink_blank)
-            memset(line + 10, ' ', 4);
+        // PR arrow on MODE area (col 9)
+        if (s_enc_focus == LCD_PR_FOCUS_MODE) {
+            char arrow = (s_enc_mode == LCD_ENC_EDIT) ? '*' : '>';
+            line[9] = arrow;
+        }
     } else {
-        lcd_apply_blink(line, 3);  // UD blink on MODE item
+        lcd_apply_arrow(line, 3);  // UD arrow on MODE item
     }
     lcd2004_print_row(3, line);
 }
@@ -849,11 +869,11 @@ static void lcd_update_task(void *pvParams) {
             s_was_preset_mode = is_pr_now;
         }
 
-        // ── Update blink state ──
+        // ── Update blink/refresh state ──
         bool need_blink_refresh = false;
 
         if (s_screen == LCD_SCREEN_SETTINGS) {
-            // Settings screen blink: only in NAV mode
+            // Settings screen: keep blink for value editing feedback
             s_blink_tick++;
             if (s_enc_mode == LCD_ENC_NAV) {
                 bool new_vis = (s_blink_tick % 2) == 0;
@@ -868,26 +888,11 @@ static void lcd_update_task(void *pvParams) {
                 need_blink_refresh = true;
             }
         } else if (s_enc_focus >= 0) {
-            // Main screen blink
-            s_blink_tick++;
-            if (s_enc_mode == LCD_ENC_NAV) {
-                bool new_vis = (s_blink_tick % 2) == 0;
-                if (new_vis != s_blink_visible) {
-                    s_blink_visible = new_vis;
-                    need_blink_refresh = true;
-                }
-                if (!lcd_is_preset_mode()) {
-                    s_blink_real = lcd_logical_to_real(s_enc_focus);
-                } else {
-                    s_blink_real = -1;  // PR mode handles blink in render
-                }
-                s_blink_blank = !s_blink_visible;
-            } else {
-                s_blink_visible = true;
-                s_blink_real = -1;
-                s_blink_blank = false;
-                need_blink_refresh = true;
-            }
+            // Main screen: arrow-based (no blink), but still trigger
+            // refresh so arrow is drawn on every frame
+            s_blink_real = -1;
+            s_blink_blank = false;
+            need_blink_refresh = true;
         } else {
             s_blink_real = -1;
             s_blink_blank = false;

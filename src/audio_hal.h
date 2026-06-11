@@ -42,7 +42,13 @@ void audio_play_weld_fire(void);
 void audio_play_ready(void);
 void audio_play_error(void);
 void audio_play_contact(void);
+void audio_play_welcome(void);
+void audio_play_ready_to_pair(void);
+void audio_play_pairing(void);
+void audio_play_connected(void);
 void audio_play_ble_connect(void);
+void audio_play_low_charge_warning(void);
+void audio_play_weak_weld_warning(void);
 
 bool audio_is_muted(void);
 void audio_set_muted(bool muted);

@@ -1,6 +1,6 @@
 # ⚡ MyWeld ESP32 Firmware
 
-> Supercapacitor spot welder controller firmware for the **Guition JC3248W535** development board (ESP32-S3, 480×320 TFT, AXS15231B touch).
+> Supercapacitor spot welder controller firmware for **ESP32-S3** boards — from the **Guition JC3248W535** color touchscreen to **20×4 character LCD** DevKit builds and more.
 
 [![Platform](https://img.shields.io/badge/Platform-ESP32--S3-blue)](https://www.espressif.com/en/products/socs/esp32-s3)
 [![Framework](https://img.shields.io/badge/Framework-ESP--IDF%205.x-red)](https://docs.espressif.com/projects/esp-idf/)
@@ -20,8 +20,10 @@
 - [Weld Pulse Sequence](#weld-pulse-sequence)
 - [BLE Protocol](#ble-protocol)
 - [Pin Assignments](#pin-assignments)
+- [Supported Boards](#supported-boards)
 - [Getting Started](#getting-started)
 - [Project Structure](#project-structure)
+- [Voice Prompts](#voice-prompts)
 - [Configuration](#configuration)
 - [Safety Design](#safety-design)
 - [Acknowledgments](#acknowledgments)
@@ -38,7 +40,7 @@
 - **BLE companion app** connectivity (Android) via a custom binary protocol
 - Up to **10 named presets** stored in NVS (flash)
 - **P1/T/P2/P3/P4 quad-pulse** support for advanced weld profiles
-- **I2S audio** feedback (startup melody, beeps, error tones) with adjustable volume
+- **I2S audio** feedback — TTS voice prompts for boot/BLE, spoken weld warnings, plus tones and melodies with adjustable volume
 - Real-time **supercapacitor voltage monitoring** with configurable max voltage (4.0–12.0 V)
 - **ADC calibration** system with per-channel correction factors stored in calibration partition
 
@@ -154,10 +156,25 @@ P3 and P4 are optional additional pulses for advanced weld profiles.
 
 ### ✅ Audio Feedback
 
+#### Spoken voice prompts (I2S speaker boards)
+
+| Prompt | When |
+|--------|------|
+| **Welcome** | Splash screen phase 1 (boot) |
+| **Ready to pair** | Splash finished and BLE advertising |
+| **Pairing** | User must enter PIN (1.5 s after connect, or wrong PIN retry) |
+| **Device has been connected** | PIN accepted (manual entry or stored PIN auto-auth) |
+| **Low charge warning** | Supercap too low to weld |
+| **Weak weld warning** | Voltage low but welding still allowed |
+
+Voice clips play first; the startup melody and BLE connect chime still follow where applicable. Buzzer-only boards use distinct tone patterns for the same states.
+
+#### Tones & melodies
+
 | Tone | Event |
 |------|-------|
-| Startup melody (C–E–G) | Boot complete |
-| Double beep (D5–A5) | BLE connected |
+| Startup melody (C–E–G) | Boot complete (after welcome voice) |
+| Double beep (D5–A5) | BLE authenticated (after connected voice) |
 | Single beep (880 Hz) | Parameter changed |
 | High beep (1200 Hz) | Pulse fired |
 | Error melody | Fault / blocked |
@@ -313,12 +330,25 @@ All multi-byte values are **little-endian**.
 
 ---
 
+## Supported Boards
+
+| PlatformIO env | Display | Audio | Notes |
+|----------------|---------|-------|-------|
+| `jc3248w535` | 3.5″ 480×320 QSPI TFT + touch (default) | I2S speaker | LVGL UI |
+| `jc4827w543` | 4.3″ 480×272 NV3041A + GT911 touch | I2S speaker | LVGL UI, 4 MB flash |
+| `esp32s3_lcd2004` | 20×4 character LCD (I2C) | I2S (MAX98357) | No LVGL |
+| `esp32s3_st7567s` | 128×64 COG graphic LCD (ST7567S) | I2S speaker | No LVGL |
+| `esp32s3_nextion` | Nextion HMI (UART) | I2S speaker | No LVGL |
+| `debug` | Same as `jc3248w535` | I2S speaker | Debug symbols, halt-on-panic |
+
+---
+
 ## Getting Started
 
 ### Prerequisites
 
 - [PlatformIO IDE](https://platformio.org/) (VS Code extension or CLI)
-- ESP32-S3 board (Guition JC3248W535 or compatible)
+- ESP32-S3 board matching one of the environments above
 - USB cable (USB-C)
 
 ### Build & Flash
@@ -328,8 +358,9 @@ All multi-byte values are **little-endian**.
 git clone https://github.com/hisham2630/MyWeld-ESP32.git
 cd MyWeld-ESP32
 
-# Flash to board (release build)
-pio run -e jc3248w535 --target upload
+# Pick your board environment, e.g.:
+pio run -e jc3248w535 --target upload      # Guition 3.5" TFT (default)
+pio run -e esp32s3_lcd2004 --target upload # 20×4 LCD DevKit + I2S amp
 
 # Monitor serial output
 pio device monitor -e jc3248w535
@@ -338,7 +369,7 @@ pio device monitor -e jc3248w535
 ### Debug Build
 
 ```bash
-# Build with full symbols + halt-on-panic
+# Build with full symbols + halt-on-panic (jc3248w535 base)
 pio run -e debug --target upload && pio device monitor -e debug
 ```
 
@@ -350,31 +381,48 @@ The debug environment uses `-Og` optimisation and `esp32_exception_decoder` for 
 
 ```
 MyWeld-ESP32/
-├── platformio.ini          # Build configuration (release + debug envs)
+├── platformio.ini          # Build environments (see Supported Boards)
 ├── partitions.csv          # Custom 16MB partition table
-├── sdkconfig.defaults      # ESP-IDF SDK defaults
-├── sdkconfig.jc3248w535    # Board-specific sdkconfig
-├── pin-definition.txt      # Quick GPIO reference
+├── assets/                 # Source WAV clips for embedded voice prompts
+├── scripts/
+│   ├── embed_wav.py        # WAV → C PCM array embedder
+│   └── generate_voice_prompts.py  # TTS generation + embed pipeline
+├── DOCS/
+│   └── voice-prompts-design.md    # Boot/BLE voice prompt spec
 ├── Schematic/              # EasyEDA project + schematic images
-│   ├── SCH_..._IR4427_2026-03-28.png   # Gate driver variant A
-│   ├── SCH_..._TLP358_2026-03-28.png   # Gate driver variant B
-│   └── easyida/            # EasyEDA source files
 └── src/
     ├── main.c              # Entry point, task launcher
-    ├── config.h            # All pin defs, thresholds, timing constants
+    ├── boot_audio.c / .h   # Splash + BLE readiness coordination
+    ├── config.h            # Pin defs, thresholds, timing constants
     ├── display.c / .h      # QSPI display init, LVGL driver, backlight
-    ├── ui.c / .h           # LVGL UI — screens, widgets, update callbacks
+    ├── ui.c / .h           # LVGL UI (TFT variants)
+    ├── lcd2004.c           # 20×4 character LCD driver
+    ├── st7567s.c           # 128×64 COG LCD driver
+    ├── nextion.c           # Nextion HMI driver
     ├── welding.c / .h      # Welding state machine + ADC task
-    ├── encoder.c / .h      # KY-040 rotary encoder input (quadrature + button)
     ├── ble_serial.c / .h   # NimBLE GATT server + protocol handler
-    ├── ble_protocol.h      # Binary protocol definitions (shared with Android)
-    ├── settings.c / .h     # NVS settings load/save, presets, PIN
-    ├── audio.c / .h        # I2S tone generator + sound effects
-    ├── ota.c / .h          # OTA firmware update support
-    ├── esp_lcd_axs15231b.c # AXS15231B QSPI display driver
-    ├── esp_lcd_touch.c     # Capacitive touch I2C driver
-    └── lv_conf.h           # LVGL configuration
+    ├── audio.c / .h        # I2S tone + voice PCM playback
+    ├── buzzer.c            # Passive buzzer backend (tone fallbacks)
+    ├── voice_*.c / .h      # Embedded TTS PCM clips
+    └── ...
 ```
+
+---
+
+## Voice Prompts
+
+Boot and BLE lifecycle prompts are pre-generated with **edge-tts**, converted to 44.1 kHz mono PCM, and embedded in flash. See [`DOCS/voice-prompts-design.md`](DOCS/voice-prompts-design.md) for the full trigger map.
+
+### Regenerate clips
+
+Requires Python 3, `edge-tts`, and `ffmpeg` on PATH:
+
+```bash
+pip install edge-tts
+python scripts/generate_voice_prompts.py
+```
+
+This updates `assets/*.wav` and the `src/voice_*.c` embed files. Rebuild firmware afterward.
 
 ---
 

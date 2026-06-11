@@ -14,6 +14,8 @@
 
 #include "nextion.h"
 #include "config.h"
+#include "audio_hal.h"
+#include "boot_audio.h"
 
 #include "driver/uart.h"
 #include "esp_log.h"
@@ -136,6 +138,7 @@ void display_hal_show_splash(void) {
     nextion_goto_page(0);
     nextion_set_text("tTitle", SPLASH_MSG_WELCOME);
     nextion_set_text("tSub", "");
+    audio_play_welcome();
     vTaskDelay(pdMS_TO_TICKS(SPLASH_WELCOME_MS));
 
     // Phase 2: App name + version + credits
@@ -145,6 +148,7 @@ void display_hal_show_splash(void) {
     nextion_set_text("tTitle", version_line);
     nextion_set_text("tSub", SPLASH_MSG_CREDITS);
     vTaskDelay(pdMS_TO_TICKS(SPLASH_VERSION_MS));
+    boot_audio_on_splash_done();
 }
 
 void display_hal_update(

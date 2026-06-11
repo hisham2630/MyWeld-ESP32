@@ -53,6 +53,7 @@ static adc_cali_handle_t s_adc_cali = NULL;
 // Timing
 static int64_t s_contact_start_us = 0;
 static int64_t s_low_v_start_us = 0;
+static int64_t s_weak_v_start_us = 0;
 static int64_t s_protect_start_us = 0;
 static bool s_start_btn_prev = false; // For edge detection
 static uint8_t s_debounce_count = 0;  // Button debounce counter
@@ -80,6 +81,8 @@ static bool s_charger_cutoff = false;
 
 // Was caps charged on last check?
 static bool s_was_ready = false;
+static bool s_low_charge_announced = false;
+static bool s_weak_weld_announced = false;
 
 // ============================================================================
 // Reset Trigger State (called on preset/parameter changes)
@@ -343,24 +346,52 @@ void welding_task(void *pvParameters)
 
         // Check supercap voltage
         float cap_v = weld_status_snapshot().supercap_voltage;
-        bool warn = (cap_v < settings_get_low_warn() && cap_v > 0.1f);
+        float weak_thresh = settings_get_weak_warn();
+        float block_thresh = settings_get_low_block();
+        bool warn = (cap_v < weak_thresh && cap_v > 0.1f);
         taskENTER_CRITICAL(&g_weld_status_mux);
         g_weld_status.low_voltage_warn = warn;
         taskEXIT_CRITICAL(&g_weld_status_mux);
 
-        if (cap_v < settings_get_low_block() && cap_v > 0.1f) {
+        // Weak-weld advisory (e.g. 5.0 V) — welding still allowed above block threshold
+        if (cap_v < weak_thresh && cap_v >= block_thresh && cap_v > 0.1f) {
+            if (s_weak_v_start_us == 0) {
+                s_weak_v_start_us = esp_timer_get_time();
+            } else if ((esp_timer_get_time() - s_weak_v_start_us) > (LOW_V_CONFIRM_MS * 1000LL)) {
+                if (!s_weak_weld_announced) {
+                    s_weak_weld_announced = true;
+                    audio_play_weak_weld_warning();
+                    ESP_LOGW(TAG, "WEAK WELD ADVISORY: %.1fV < %.1fV", cap_v, weak_thresh);
+                }
+            }
+        } else if (cap_v >= weak_thresh + SUPERCAP_V_WEAK_HYST) {
+            s_weak_v_start_us = 0;
+            s_weak_weld_announced = false;
+        } else if (cap_v < block_thresh) {
+            s_weak_v_start_us = 0;
+        }
+
+        if (cap_v < block_thresh && cap_v > 0.1f) {
             if (s_low_v_start_us == 0) {
                 s_low_v_start_us = esp_timer_get_time();
             } else if ((esp_timer_get_time() - s_low_v_start_us) > (LOW_V_CONFIRM_MS * 1000LL)) {
+                bool announce = false;
                 taskENTER_CRITICAL(&g_weld_status_mux);
-                g_weld_status.low_voltage_block = true;
+                if (!g_weld_status.low_voltage_block) {
+                    g_weld_status.low_voltage_block = true;
+                    announce = !s_low_charge_announced;
+                }
                 taskEXIT_CRITICAL(&g_weld_status_mux);
-                if (g_weld_state == WELD_STATE_IDLE) {
-                    g_weld_state = WELD_STATE_BLOCKED;
-                    ui_update_weld_state(WELD_STATE_BLOCKED);
+
+                if (announce) {
+                    s_low_charge_announced = true;
+                    if (g_weld_state == WELD_STATE_IDLE) {
+                        g_weld_state = WELD_STATE_BLOCKED;
+                        ui_update_weld_state(WELD_STATE_BLOCKED);
+                    }
                     status_led_set_event(LED_EVT_LOW_VOLTAGE);
-                    audio_play_error();
-                    ESP_LOGW(TAG, "LOW VOLTAGE: %.1fV < %.1fV", cap_v, settings_get_low_block());
+                    audio_play_low_charge_warning();
+                    ESP_LOGW(TAG, "LOW VOLTAGE: %.1fV < %.1fV", cap_v, block_thresh);
                 }
             }
         } else {
@@ -370,6 +401,7 @@ void welding_task(void *pvParameters)
                 g_weld_status.low_voltage_block = false;
                 bool prot_fault = g_weld_status.protection_fault;
                 taskEXIT_CRITICAL(&g_weld_status_mux);
+                s_low_charge_announced = false;
                 if (g_weld_state == WELD_STATE_BLOCKED && !prot_fault) {
                     g_weld_state = WELD_STATE_IDLE;
                     ui_update_weld_state(WELD_STATE_IDLE);

@@ -19,6 +19,8 @@
 
 #include "lcd1604.h"
 #include "config.h"
+#include "audio_hal.h"
+#include "boot_audio.h"
 
 #include "driver/i2c.h"
 #include "esp_log.h"
@@ -173,6 +175,7 @@ void display_hal_show_splash(void) {
     // Phase 1: Welcome
     lcd1604_clear();
     lcd1604_center_row(1, SPLASH_MSG_WELCOME);
+    audio_play_welcome();
     vTaskDelay(pdMS_TO_TICKS(SPLASH_WELCOME_MS));
 
     // Phase 2: App name + version + credits
@@ -186,6 +189,7 @@ void display_hal_show_splash(void) {
 
     // Clear for dashboard
     lcd1604_clear();
+    boot_audio_on_splash_done();
 }
 
 void display_hal_update(

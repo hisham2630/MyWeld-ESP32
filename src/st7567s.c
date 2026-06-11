@@ -17,6 +17,7 @@
 #include "encoder.h"
 #include "settings.h"
 #include "audio_hal.h"
+#include "boot_audio.h"
 
 #include "driver/i2c.h"
 #include "esp_timer.h"
@@ -708,6 +709,7 @@ void display_hal_show_splash(void) {
     st7567s_text_large(tx1, 22, SPLASH_MSG_WELCOME, 1);
     s_page_dirty = 0xFF;
     st7567s_flush();
+    audio_play_welcome();
     vTaskDelay(pdMS_TO_TICKS(SPLASH_WELCOME_MS));
 
     // Phase 2: App name (large) + version + credits
@@ -737,6 +739,7 @@ void display_hal_show_splash(void) {
     // Clear for dashboard
     st7567s_clear(0);
     st7567s_flush();
+    boot_audio_on_splash_done();
 }
 
 void display_hal_update(

@@ -143,10 +143,48 @@ void audio_play_contact(void) {
     buzzer_play_tone(TONE_CONTACT, 20);
 }
 
+void audio_play_welcome(void) {
+    buzzer_play_tone(TONE_STARTUP_C, 70);
+    vTaskDelay(pdMS_TO_TICKS(25));
+    buzzer_play_tone(TONE_STARTUP_E, 70);
+    vTaskDelay(pdMS_TO_TICKS(25));
+    buzzer_play_tone(TONE_STARTUP_G, 90);
+}
+
+void audio_play_ready_to_pair(void) {
+    buzzer_play_tone(TONE_READY_LOW, 90);
+    vTaskDelay(pdMS_TO_TICKS(30));
+    buzzer_play_tone(TONE_READY_HIGH, 120);
+}
+
+void audio_play_pairing(void) {
+    buzzer_play_tone(TONE_BEEP, 80);
+    vTaskDelay(pdMS_TO_TICKS(120));
+    buzzer_play_tone(TONE_BEEP, 80);
+}
+
+void audio_play_connected(void) {
+    buzzer_play_tone(TONE_BLE_NOTE_1, 70);
+    vTaskDelay(pdMS_TO_TICKS(25));
+    buzzer_play_tone(TONE_BLE_NOTE_2, 90);
+}
+
 void audio_play_ble_connect(void) {
     buzzer_play_tone(TONE_BLE_NOTE_1, 60);
     vTaskDelay(pdMS_TO_TICKS(20));
     buzzer_play_tone(TONE_BLE_NOTE_2, 80);
+}
+
+void audio_play_low_charge_warning(void) {
+    audio_play_error();
+    vTaskDelay(pdMS_TO_TICKS(120));
+    audio_play_error();
+}
+
+void audio_play_weak_weld_warning(void) {
+    audio_play_beep();
+    vTaskDelay(pdMS_TO_TICKS(80));
+    audio_play_beep();
 }
 
 bool audio_is_muted(void) {

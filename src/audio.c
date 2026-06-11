@@ -11,6 +11,12 @@
 
 #include "audio.h"
 #include "settings.h"
+#include "voice_low_charge.h"
+#include "voice_weak_weld.h"
+#include "voice_welcome.h"
+#include "voice_ready_to_pair.h"
+#include "voice_pairing.h"
+#include "voice_connected.h"
 #include "esp_log.h"
 #include "driver/i2s_std.h"
 #include "freertos/FreeRTOS.h"
@@ -26,11 +32,20 @@ static i2s_chan_handle_t s_tx_handle = NULL;
 static bool s_muted = false;
 static uint8_t s_volume = 80; // Master volume 0–100%
 
+typedef enum {
+    AUDIO_CMD_SILENCE = 0,
+    AUDIO_CMD_TONE,
+    AUDIO_CMD_PCM,
+} audio_cmd_type_t;
+
 // Audio command queue
 typedef struct {
+    audio_cmd_type_t type;
     uint16_t freq_hz;
     uint16_t duration_ms;
     bool     quiet;       // true = 25% amplitude (soft welcome chime)
+    const int16_t *pcm;
+    size_t   pcm_samples;
 } audio_cmd_t;
 
 #define AUDIO_QUEUE_SIZE 8
@@ -90,6 +105,37 @@ static void play_sine_tone(uint16_t freq_hz, uint16_t duration_ms, int16_t ampli
 }
 
 /**
+ * Stream pre-recorded mono PCM samples through I2S.
+ * Blocking — called from the audio task.
+ */
+static void play_pcm_samples(const int16_t *samples, size_t num_samples, int16_t amplitude)
+{
+    if (!s_tx_handle || !samples || num_samples == 0) return;
+
+    #define CHUNK_SAMPLES 256
+    int16_t buffer[CHUNK_SAMPLES * 2];
+    size_t offset = 0;
+    size_t bytes_written;
+
+    while (offset < num_samples) {
+        size_t chunk = num_samples - offset;
+        if (chunk > CHUNK_SAMPLES) chunk = CHUNK_SAMPLES;
+
+        for (size_t i = 0; i < chunk; i++) {
+            int16_t sample = (int16_t)((int32_t)samples[offset + i] * amplitude / 16000);
+            buffer[i * 2]     = sample;
+            buffer[i * 2 + 1] = sample;
+        }
+
+        i2s_channel_write(s_tx_handle, buffer, chunk * 4, &bytes_written, pdMS_TO_TICKS(200));
+        offset += chunk;
+    }
+
+    memset(buffer, 0, sizeof(buffer));
+    i2s_channel_write(s_tx_handle, buffer, CHUNK_SAMPLES * 4, &bytes_written, pdMS_TO_TICKS(50));
+}
+
+/**
  * Audio processing task (runs on Core 1).
  * Dequeues tone commands and plays them.
  */
@@ -100,15 +146,18 @@ static void audio_task(void *pvParameters)
 
     while (1) {
         if (xQueueReceive(s_audio_queue, &cmd, portMAX_DELAY) == pdTRUE) {
-            if (cmd.freq_hz == 0) {
-                // Silence/pause command — just wait
+            if (cmd.type == AUDIO_CMD_SILENCE) {
                 vTaskDelay(pdMS_TO_TICKS(cmd.duration_ms));
             } else if (!s_muted) {
-                // Scale amplitude by master volume: base 16000 (normal) or 10000 (quiet)
                 int16_t base_amp = cmd.quiet ? 10000 : 16000;
                 int16_t amp = (int16_t)((int32_t)base_amp * s_volume / 100);
                 if (amp < 0) amp = 0;
-                play_sine_tone(cmd.freq_hz, cmd.duration_ms, amp);
+
+                if (cmd.type == AUDIO_CMD_PCM) {
+                    play_pcm_samples(cmd.pcm, cmd.pcm_samples, amp);
+                } else if (cmd.type == AUDIO_CMD_TONE && cmd.freq_hz != 0) {
+                    play_sine_tone(cmd.freq_hz, cmd.duration_ms, amp);
+                }
             }
         }
     }
@@ -117,14 +166,35 @@ static void audio_task(void *pvParameters)
 static void queue_tone(uint16_t freq, uint16_t duration)
 {
     if (!s_audio_queue || s_muted) return;
-    audio_cmd_t cmd = { .freq_hz = freq, .duration_ms = duration, .quiet = false };
+    audio_cmd_t cmd = {
+        .type = (freq == 0) ? AUDIO_CMD_SILENCE : AUDIO_CMD_TONE,
+        .freq_hz = freq,
+        .duration_ms = duration,
+        .quiet = false,
+    };
     xQueueSend(s_audio_queue, &cmd, 0);
 }
 
 static void queue_tone_quiet(uint16_t freq, uint16_t duration)
 {
     if (!s_audio_queue || s_muted) return;
-    audio_cmd_t cmd = { .freq_hz = freq, .duration_ms = duration, .quiet = true };
+    audio_cmd_t cmd = {
+        .type = (freq == 0) ? AUDIO_CMD_SILENCE : AUDIO_CMD_TONE,
+        .freq_hz = freq,
+        .duration_ms = duration,
+        .quiet = true,
+    };
+    xQueueSend(s_audio_queue, &cmd, 0);
+}
+
+static void queue_pcm(const int16_t *pcm, size_t samples)
+{
+    if (!s_audio_queue || s_muted || !pcm || samples == 0) return;
+    audio_cmd_t cmd = {
+        .type = AUDIO_CMD_PCM,
+        .pcm = pcm,
+        .pcm_samples = samples,
+    };
     xQueueSend(s_audio_queue, &cmd, 0);
 }
 
@@ -219,16 +289,51 @@ void audio_play_contact(void)
     queue_tone(TONE_CONTACT, 20);
 }
 
+void audio_play_welcome(void)
+{
+    if (s_muted) return;
+    queue_pcm(voice_welcome_pcm, voice_welcome_pcm_samples);
+}
+
+void audio_play_ready_to_pair(void)
+{
+    if (s_muted) return;
+    queue_pcm(voice_ready_to_pair_pcm, voice_ready_to_pair_pcm_samples);
+}
+
+void audio_play_pairing(void)
+{
+    if (s_muted) return;
+    queue_pcm(voice_pairing_pcm, voice_pairing_pcm_samples);
+}
+
+void audio_play_connected(void)
+{
+    if (s_muted) return;
+    queue_pcm(voice_connected_pcm, voice_connected_pcm_samples);
+}
+
 void audio_play_ble_connect(void)
 {
     if (s_muted) return;
-    // Soft 2-note ascending welcome chime at 25% amplitude
-    // D5 (587Hz, 80ms) → brief gap → A5 (880Hz, 120ms)
-    // Similar character to JK BMS welcome tone: warm, brief, low volume
     queue_tone_quiet(TONE_BLE_NOTE_1, 80);
-    queue_tone_quiet(0, 30);          // 30ms silence gap (0Hz = silence)
+    queue_tone_quiet(0, 30);
     queue_tone_quiet(TONE_BLE_NOTE_2, 120);
     ESP_LOGD("Audio", "BLE connect chime queued");
+}
+
+void audio_play_low_charge_warning(void)
+{
+    if (s_muted) return;
+    queue_pcm(voice_low_charge_pcm, voice_low_charge_pcm_samples);
+    ESP_LOGI(TAG, "Low charge voice prompt queued");
+}
+
+void audio_play_weak_weld_warning(void)
+{
+    if (s_muted) return;
+    queue_pcm(voice_weak_weld_pcm, voice_weak_weld_pcm_samples);
+    ESP_LOGI(TAG, "Weak weld voice prompt queued");
 }
 
 bool audio_is_muted(void)

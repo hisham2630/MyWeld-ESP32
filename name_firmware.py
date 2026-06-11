@@ -57,7 +57,7 @@ try:
     prog_name = f"MyWeld_{env_name}_v{ver_str}"
 
     env.Replace(PROGNAME=prog_name)
-    print(f"  Version bumped → v{ver_str}")
+    print(f"  Version bumped -> v{ver_str}")
     print(f"  Firmware output: {prog_name}.bin")
 
 except Exception as e:

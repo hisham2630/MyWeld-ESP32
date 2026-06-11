@@ -18,6 +18,7 @@
 
 #include "ui.h"
 #include "audio.h"
+#include "boot_audio.h"
 #include "ble_serial.h"
 #include "display.h"
 #include "encoder.h"
@@ -1258,6 +1259,7 @@ static void splash_timer_cb(lv_timer_t *t) {
         // Phase 3: transition to main dashboard
         lv_timer_delete(tmr_splash);
         tmr_splash = NULL;
+        boot_audio_on_splash_done();
 
         lv_scr_load_anim(scr_main, LV_SCR_LOAD_ANIM_FADE_IN, 400, 0, true);
         scr_splash = NULL;  // deleted by lv_scr_load_anim
@@ -1353,6 +1355,7 @@ void ui_task(void *pvParameters) {
     lv_obj_invalidate(lv_screen_active());
     // Start Phase 1 timer
     s_splash_phase = 0;
+    audio_play_welcome();
     tmr_splash = lv_timer_create(splash_timer_cb, SPLASH_WELCOME_MS, NULL);
     lv_timer_set_repeat_count(tmr_splash, -1);  // We manage deletion manually
   } else {

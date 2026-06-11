@@ -12,6 +12,7 @@ set(CORE_SRCS
     "settings.c"
     "welding.c"
     "ble_serial.c"
+    "boot_audio.c"
     "ota.c"
     "encoder.c"
     "hw_descriptor.c"
@@ -50,6 +51,12 @@ set(DISPLAY_SRCS
 set(AUDIO_SRCS
     "audio.c"
     "buzzer.c"
+    "voice_low_charge.c"
+    "voice_weak_weld.c"
+    "voice_welcome.c"
+    "voice_ready_to_pair.c"
+    "voice_pairing.c"
+    "voice_connected.c"
 )
 
 # --- Component dependencies ---

@@ -474,14 +474,23 @@ float settings_get_full_voltage(void)
     return g_settings.max_supercap_voltage - 0.2f;
 }
 
+float settings_get_weak_warn(void)
+{
+    // Typical 2S2P bank (max ≤ 6.5 V): fixed 5.0 V advisory before 4.7 V block.
+    if (g_settings.max_supercap_voltage <= 6.5f) {
+        return SUPERCAP_V_WEAK_WARN;
+    }
+    return g_settings.max_supercap_voltage * 0.88f;
+}
+
 float settings_get_low_warn(void)
 {
-    return g_settings.max_supercap_voltage * 0.70f;
+    return settings_get_weak_warn();
 }
 
 float settings_get_low_block(void)
 {
-    return g_settings.max_supercap_voltage * 0.50f;
+    return SUPERCAP_V_BLOCK;
 }
 
 float settings_get_contact_threshold(void)

@@ -21,7 +21,9 @@
 #include "settings.h"
 #include "welding.h"
 #include "audio.h"
+#include "boot_audio.h"
 #include "ui.h"
+#include "esp_timer.h"
 #include "status_led.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -51,6 +53,34 @@ static uint16_t s_ota_attr_handle = 0;   // OTA characteristic notify handle
 // ── PIN lockout state ───────────────────────────────────────────────────────
 static uint8_t  s_failed_attempts  = 0;   // Consecutive wrong PIN count
 static TickType_t s_lockout_start  = 0;   // Tick when lockout began (0 = inactive)
+
+#define PAIRING_PROMPT_DELAY_US 1500000ULL  // 1.5s — skip if auto-auth succeeds first
+
+static esp_timer_handle_t s_pairing_timer = NULL;
+
+static void pairing_timer_cb(void *arg)
+{
+    (void)arg;
+    if (s_connected && !s_authenticated) {
+        audio_play_pairing();
+    }
+}
+
+static void pairing_timer_stop(void)
+{
+    if (s_pairing_timer) {
+        esp_timer_stop(s_pairing_timer);
+    }
+}
+
+static void pairing_timer_start(void)
+{
+    if (!s_pairing_timer || s_authenticated) {
+        return;
+    }
+    pairing_timer_stop();
+    esp_timer_start_once(s_pairing_timer, PAIRING_PROMPT_DELAY_US);
+}
 
 static uint8_t lockout_remaining_sec(void)
 {
@@ -603,6 +633,9 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         if (settings_verify_pin(pin)) {
             s_authenticated = true;
             s_failed_attempts = 0;
+            pairing_timer_stop();
+            audio_play_connected();
+            audio_play_ble_connect();
             ESP_LOGI(TAG, "BLE authenticated successfully");
             send_ack(BLE_MSG_CMD);
         } else {
@@ -611,11 +644,14 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             ESP_LOGW(TAG, "BLE auth failed — wrong PIN (attempt %d/%d)",
                      s_failed_attempts, BLE_AUTH_MAX_ATTEMPTS);
             if (s_failed_attempts >= BLE_AUTH_MAX_ATTEMPTS) {
+                pairing_timer_stop();
                 s_lockout_start = xTaskGetTickCount();
                 ESP_LOGW(TAG, "Too many failed attempts — locking out for %d seconds",
                          BLE_AUTH_LOCKOUT_SEC);
                 send_nak(BLE_MSG_CMD, BLE_ERR_AUTH_LOCKED);
             } else {
+                pairing_timer_stop();
+                audio_play_pairing();
                 send_nak(BLE_MSG_CMD, BLE_ERR_AUTH_FAILED);
             }
         }
@@ -1071,8 +1107,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                 // Set preferred MTU — the Android app initiates the exchange
                 ble_att_set_preferred_mtu(247);
 
-                // Welcome chime — soft 2-note ascending tone (like JK BMS)
-                audio_play_ble_connect();
+                pairing_timer_start();
                 status_led_set_event(LED_EVT_BLE_CONNECTED);
 
                 ESP_LOGI(TAG, "BLE client connected (handle=%d)", s_conn_handle);
@@ -1080,6 +1115,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
             break;
 
         case BLE_GAP_EVENT_DISCONNECT:
+            pairing_timer_stop();
             s_connected = false;
             s_authenticated = false;  // Force re-auth on next connection
             s_failed_attempts = 0;    // Reset lockout counter on disconnect
@@ -1161,6 +1197,7 @@ static void ble_on_sync(void)
                       &adv_params, gap_event_cb, NULL);
 
     ESP_LOGI(TAG, "BLE advertising as '%s' (Binary Protocol V2)", g_settings.ble_name);
+    boot_audio_on_ble_adv_ready();
 }
 
 // ============================================================================
@@ -1258,6 +1295,12 @@ void ble_serial_init(void)
 
     // Set sync callback
     ble_hs_cfg.sync_cb = ble_on_sync;
+
+    const esp_timer_create_args_t pairing_timer_args = {
+        .callback = pairing_timer_cb,
+        .name = "pairing_prompt",
+    };
+    esp_timer_create(&pairing_timer_args, &s_pairing_timer);
 
     // Start NimBLE host task
     nimble_port_freertos_init(ble_host_task);
