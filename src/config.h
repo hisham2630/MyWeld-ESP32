@@ -27,8 +27,28 @@
 #define PIN_OUTPUT      GPIO_NUM_46  // MOSFET bank fire signal (P2 pin 6)
 #endif
 #ifndef PIN_CHARGER_EN
-#define PIN_CHARGER_EN  GPIO_NUM_16  // Supercap charger KEY control (P2 pin 5)
+#define PIN_CHARGER_EN  GPIO_NUM_16  // Charger disconnect control (P2 pin 5)
 #endif
+
+// Charger disconnect hardware (set one):
+//   CHARGER_CTRL_SSR=1 — DC SSR in series: GPIO HIGH = SSR ON = charging (OFF during pulse)
+//   CHARGER_CTRL_SSR=0 — Buck module KEY via 2N2222: GPIO LOW = charging (legacy)
+#ifndef CHARGER_CTRL_SSR
+#define CHARGER_CTRL_SSR  1
+#endif
+
+#if CHARGER_CTRL_SSR
+#define CHARGER_GPIO_LEVEL_ON   1
+#define CHARGER_GPIO_LEVEL_OFF  0
+#else
+#define CHARGER_GPIO_LEVEL_ON   0
+#define CHARGER_GPIO_LEVEL_OFF  1
+#endif
+
+// Use these instead of raw gpio_set_level(PIN_CHARGER_EN, …)
+#define charger_gpio_enable()   gpio_set_level(PIN_CHARGER_EN, CHARGER_GPIO_LEVEL_ON)
+#define charger_gpio_disable()  gpio_set_level(PIN_CHARGER_EN, CHARGER_GPIO_LEVEL_OFF)
+#define charger_gpio_is_on()    (gpio_get_level(PIN_CHARGER_EN) == CHARGER_GPIO_LEVEL_ON)
 
 // --- Physical Input ---
 #ifndef PIN_START
@@ -302,8 +322,8 @@ typedef struct {
 // ============================================================================
 #define FW_VERSION_MAJOR     1
 #define FW_VERSION_MINOR     0
-#define FW_VERSION_PATCH     67
-#define FW_VERSION_STRING    "1.0.67"
+#define FW_VERSION_PATCH     68
+#define FW_VERSION_STRING    "1.0.68"
 #define FW_BUILD_DATE        __DATE__
 #define FW_BUILD_TIME        __TIME__
 

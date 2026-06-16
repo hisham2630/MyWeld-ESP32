@@ -94,7 +94,7 @@ const char* welding_state_str(weld_state_t state);
 
 /**
  * Check if the supercap charger is currently active.
- * @return true if charger is enabled (PIN_CHARGER_EN = LOW)
+ * @return true if charger path is enabled (SSR ON or KEY released)
  */
 bool welding_is_charging(void);
 

@@ -51,7 +51,7 @@ static void gpio_init_safe_defaults(void) {
   gpio_config(&output_conf);
   gpio_set_level(PIN_OUTPUT, 0);
 
-  // CHARGER_EN → LOW (charger enabled by default)
+  // CHARGER_EN → ON (charger enabled by default; polarity via CHARGER_CTRL_SSR)
   gpio_config_t charger_conf = {
       .pin_bit_mask = (1ULL << PIN_CHARGER_EN),
       .mode = GPIO_MODE_OUTPUT,
@@ -60,7 +60,7 @@ static void gpio_init_safe_defaults(void) {
       .intr_type = GPIO_INTR_DISABLE,
   };
   gpio_config(&charger_conf);
-  gpio_set_level(PIN_CHARGER_EN, 0);
+  gpio_set_level(PIN_CHARGER_EN, CHARGER_GPIO_LEVEL_ON);
 
   // START_PIN (weld button) → input with pull-up
   gpio_config_t start_conf = {
@@ -74,7 +74,10 @@ static void gpio_init_safe_defaults(void) {
 
   ESP_LOGI(TAG, "GPIO safe defaults initialized");
   ESP_LOGI(TAG, "  OUTPUT_PIN (IO%d) = LOW", PIN_OUTPUT);
-  ESP_LOGI(TAG, "  CHARGER_EN (IO%d) = LOW (charger ON)", PIN_CHARGER_EN);
+  ESP_LOGI(TAG, "  CHARGER_EN (IO%d) = %s (charger ON, SSR=%d)",
+           PIN_CHARGER_EN,
+           CHARGER_GPIO_LEVEL_ON ? "HIGH" : "LOW",
+           CHARGER_CTRL_SSR);
   ESP_LOGI(TAG, "  START_PIN  (IO%d) = INPUT_PULLUP", PIN_START);
 }
 

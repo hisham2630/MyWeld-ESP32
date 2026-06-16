@@ -13,7 +13,7 @@
  * 
  * Safety:
  *   - OUTPUT_PIN defaults LOW (set in main.c before this module loads)
- *   - CHARGER_EN defaults LOW (charger enabled)
+ *   - CHARGER_EN defaults ON (charger enabled — polarity via CHARGER_CTRL_SSR)
  *   - Weld only fires when physical START button pressed (MAN)
  *     or electrode contact held for S seconds (AUTO)
  *   - Protection checks run every cycle
@@ -203,8 +203,8 @@ void welding_fire_pulse(void)
 
     g_weld_state = WELD_STATE_PRE_FIRE;
 
-    // 1. Disable charger
-    gpio_set_level(PIN_CHARGER_EN, 1);
+    // 1. Disable charger (SSR OFF or KEY pulled low via 2N2222)
+    charger_gpio_disable();
     ets_delay_us(CHARGER_SETTLE_US);
 
     // 2. Fire Pulse 1 (always active — interrupts disabled for timing accuracy)
@@ -433,7 +433,7 @@ void welding_task(void *pvParameters)
             if (elapsed_us >= (int64_t)POST_PULSE_CHARGE_DELAY_MS * 1000LL) {
                 // Only re-enable if voltage-based cutoff is NOT active
                 if (!s_charger_cutoff) {
-                    gpio_set_level(PIN_CHARGER_EN, 0); // Re-enable charger
+                    charger_gpio_enable();
                     ESP_LOGI(TAG, "Charger hold-off complete, charger re-enabled");
                 } else {
                     ESP_LOGI(TAG, "Charger hold-off complete, but cutoff active (%.1fV >= %.1fV)",
@@ -621,14 +621,14 @@ void adc_task(void *pvParameters)
         // ==============================================
         if (!s_charger_cutoff && v_cap >= settings_get_max_voltage()) {
             s_charger_cutoff = true;
-            gpio_set_level(PIN_CHARGER_EN, 1); // Disable charger
+            charger_gpio_disable();
             ESP_LOGI(TAG, "CHARGE CUTOFF: %.2fV >= %.1fV — charger disabled",
                      v_cap, settings_get_max_voltage());
         } else if (s_charger_cutoff && v_cap <= settings_get_full_voltage()) {
             s_charger_cutoff = false;
             // Only re-enable if not in pulse hold-off
             if (!s_charger_holdoff) {
-                gpio_set_level(PIN_CHARGER_EN, 0); // Re-enable charger
+                charger_gpio_enable();
                 ESP_LOGI(TAG, "CHARGE RESUME: %.2fV <= %.1fV — charger enabled",
                          v_cap, settings_get_full_voltage());
             }
@@ -680,6 +680,5 @@ const char* welding_state_str(weld_state_t state)
 
 bool welding_is_charging(void)
 {
-    // Charger is active-LOW: PIN_CHARGER_EN=0 → charging, 1 → disabled
-    return (gpio_get_level(PIN_CHARGER_EN) == 0);
+    return charger_gpio_is_on();
 }
