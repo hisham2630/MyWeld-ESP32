@@ -86,6 +86,7 @@ typedef struct {
     float   min_val;
     float   max_val;
     float   step;
+    bool    allow_off;
 } lcd_focus_meta_t;
 
 //                                                          Arrow positions:
@@ -93,13 +94,13 @@ typedef struct {
 // Row 2: " P3:00  P4:00 S:0.5 " -> arrows at col 0, 7, 13
 // Row 3: "status    AUTO UD  B" -> arrow at col 9
 static const lcd_focus_meta_t s_focus_meta[LCD_FOCUS_COUNT] = {
-    {1,  1, 5,  0, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P1: ">P1:05"
-    {1,  8, 4,  7, PAUSE_MIN_MS, PAUSE_MAX_MS, PAUSE_STEP_MS}, // T:  ">T:00"
-    {1, 14, 5, 13, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P2: ">P2:00"
-    {2,  1, 5,  0, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P3: ">P3:00"
-    {2,  8, 5,  7, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS}, // P4: ">P4:00"
-    {2, 14, 5, 13, S_VALUE_MIN,  S_VALUE_MAX,  S_VALUE_STEP},  // S:  ">S:0.5"
-    {3, 10, 4,  9, 0, 0, 0},                                   // MODE ">AUTO"
+    {1,  1, 5,  0, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS, false}, // P1
+    {1,  8, 4,  7, PAUSE_MIN_MS, PAUSE_MAX_MS, PAUSE_STEP_MS, true},  // T
+    {1, 14, 5, 13, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS, true},  // P2
+    {2,  1, 5,  0, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS, true},  // P3
+    {2,  8, 5,  7, PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS, true},  // P4
+    {2, 14, 5, 13, S_VALUE_MIN,  S_VALUE_MAX,  S_VALUE_STEP,  false}, // S
+    {3, 10, 4,  9, 0, 0, 0, false},                                  // MODE
 };
 
 static int            s_enc_focus = -1;       // -1 = no focus
@@ -418,15 +419,16 @@ static void lcd_handle_encoder(encoder_event_t evt) {
             audio_play_beep();
         } else {
             int dir = (evt == ENC_EVENT_CW) ? 1 : -1;
+            int accel = encoder_accel_mult();
             int real = lcd_logical_to_real(s_enc_focus);
             float *val = lcd_get_value_ptr(real);
             if (val) {
                 const lcd_focus_meta_t *m = &s_focus_meta[real];
-                *val += dir * m->step;
-                if (*val > m->max_val) *val = m->max_val;
-                if (*val < m->min_val) *val = m->min_val;
+                *val = settings_nudge_param(*val, dir * m->step * accel, m->min_val,
+                                            m->max_val, m->allow_off);
+                settings_sync_pulse_chain();
             }
-            audio_play_beep();
+            if (accel <= 1) audio_play_beep();
         }
     }
 }
@@ -826,8 +828,10 @@ static void lcd_update_task(void *pvParams) {
         }
 
         // ── Poll rotary encoder ──
+        bool enc_activity = false;
         encoder_event_t enc_evt;
         while (encoder_poll(&enc_evt)) {
+            enc_activity = true;
             if (s_screen == LCD_SCREEN_MAIN) {
                 if (enc_evt == ENC_EVENT_LONG_PRESS) {
                     // Enter settings screen
@@ -908,7 +912,9 @@ static void lcd_update_task(void *pvParams) {
         } else if (ui_stub_is_dirty() || need_blink_refresh) {
             ui_stub_refresh_display();
         }
-        vTaskDelay(pdMS_TO_TICKS(250));  // 4Hz — safe for I2C on Core 0
+        // Encoder events are ISR-queued; poll often while turning so the
+        // display tracks the knob. Idle stays at 4 Hz for I2C.
+        vTaskDelay(pdMS_TO_TICKS(enc_activity ? 15 : 250));
     }
 }
 

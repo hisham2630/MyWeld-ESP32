@@ -176,11 +176,7 @@ static uint8_t map_weld_state(weld_state_t state)
 
 static uint8_t compute_charge_percent(float voltage)
 {
-    float low  = settings_get_low_block();
-    float high = settings_get_max_voltage();
-    if (voltage <= low)  return 0;
-    if (voltage >= high) return 100;
-    return (uint8_t)((voltage - low) / (high - low) * 100.0f);
+    return settings_get_charge_percent(voltage);
 }
 
 // ============================================================================
@@ -443,6 +439,8 @@ static int params_access_cb(uint16_t conn_handle, uint16_t attr_handle,
         g_settings.volume    = p->volume;
         g_settings.theme     = p->theme;
 
+        settings_sync_pulse_chain();
+
         // Apply volume and mute state to audio engine
         audio_set_muted(!g_settings.sound_on);
         audio_set_volume(g_settings.volume);
@@ -484,7 +482,7 @@ static int params_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 
         settings_save();
         ESP_LOGI(TAG, "Params updated: P1=%.1f T=%.1f P2=%.1f P3=%.1f P4=%.1f S=%.1f MODE=%s",
-                 new_p1, new_t, new_p2, new_p3, new_p4, new_s,
+                 g_settings.p1, g_settings.t, g_settings.p2, g_settings.p3, g_settings.p4, g_settings.s_value,
                  g_settings.auto_mode ? "AUTO" : "MAN");
 
         // Refresh ESP32 UI labels — g_settings was updated from BLE
@@ -724,12 +722,11 @@ static int cmd_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             float p4 = p4_x10 / 10.0f;
 
             // Auto-clamp to enforce constraints:
-            // P1 ≤ P2, P3 ≤ P2, P4 ≤ P3, T 20–150
+            // P1 ≤ P2, P3 ≤ P2, P4 ≤ P3, T = 0 or PAUSE_MIN–PAUSE_MAX
             if (p1 > p2) p1 = p2;
             if (p3 > p2) p3 = p2;
             if (p4 > p3) p4 = p3;
-            if (t < PAUSE_MIN_MS) t = PAUSE_MIN_MS;
-            if (t > PAUSE_MAX_MS) t = PAUSE_MAX_MS;
+            t = settings_clamp_param(t, PAUSE_MIN_MS, PAUSE_MAX_MS, true);
 
             // Validate pulse ranges
             if (p1 < PULSE_HW_MIN_MS || p1 > PULSE_MAX_MS ||

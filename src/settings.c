@@ -26,7 +26,7 @@ static bool s_dirty = false;
 
 // Factory default presets (7 factory read-only + 13 user-customisable)
 // Factory presets: { name, p1, t, p2, p3, p4 }
-// NOTE: T values must be within PAUSE_MIN_MS (20) – PAUSE_MAX_MS (150) range
+// NOTE: T values must be 0 (single-pulse) or PAUSE_MIN_MS–PAUSE_MAX_MS
 // Auto-clamp: P1 ≤ P2, P3 ≤ P2, P4 ≤ P3
 static const weld_preset_t factory_presets[MAX_PRESETS] = {
     { "0.1mm Nickel",     3.0f, 20.0f,  5.0f,  0.0f, 0.0f },  // 0
@@ -168,6 +168,8 @@ static void settings_load_from_nvs(void)
 
 static void settings_write_to_nvs(void)
 {
+    settings_sync_pulse_chain();
+
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &s_nvs_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open NVS for writing: %s", esp_err_to_name(err));
@@ -236,6 +238,10 @@ void settings_init(void)
         .name = "nvs_save",
     };
     esp_timer_create(&timer_args, &s_save_timer);
+
+    if (settings_sync_pulse_chain()) {
+        settings_save();
+    }
 
     ESP_LOGI(TAG, "Settings initialized");
 }
@@ -383,6 +389,7 @@ void settings_load_preset(uint8_t index)
     g_settings.p2 = p->p2;
     g_settings.p3 = p->p3;
     g_settings.p4 = p->p4;
+    settings_sync_pulse_chain();
     // NOTE: s_value and auto_mode are device-level preferences, NOT per-preset.
     // Loading a preset must NOT change them — only weld pulse parameters.
     g_settings.active_preset = index;
@@ -427,6 +434,13 @@ void settings_save_preset(uint8_t index, const char *name,
     p->p2        = p2;
     p->p3        = p3;
     p->p4        = p4;
+    if (p->t <= 0.0f) {
+        p->p2 = 0.0f;
+        p->p3 = 0.0f;
+        p->p4 = 0.0f;
+    } else if (p->p3 <= 0.0f) {
+        p->p4 = 0.0f;
+    }
     settings_save_now();
     ESP_LOGI(TAG, "Saved preset %d: '%s' (P1=%.1f T=%.1f P2=%.1f P3=%.1f P4=%.1f)",
              index, name, p1, t, p2, p3, p4);
@@ -493,10 +507,59 @@ float settings_get_low_block(void)
     return SUPERCAP_V_BLOCK;
 }
 
+uint8_t settings_get_charge_percent(float voltage)
+{
+    float high = settings_get_max_voltage();
+    if (high < 0.1f || voltage <= 0.0f) {
+        return 0;
+    }
+    if (voltage >= high) {
+        return 100;
+    }
+    return (uint8_t)((voltage / high) * 100.0f);
+}
+
 float settings_get_contact_threshold(void)
 {
     // Contact detect divider: Vin × R_low / (R_high + R_low) × detection ratio
     return g_settings.max_supercap_voltage
            * (CONTACT_R_LOW / (CONTACT_R_HIGH + CONTACT_R_LOW))
            * CONTACT_DETECT_RATIO;
+}
+
+float settings_nudge_param(float current, float delta, float min_active,
+                           float max_v, bool allow_off)
+{
+    if (allow_off && current <= 0.0f) {
+        if (delta > 0.0f) return min_active;
+        if (delta < 0.0f) return max_v;
+        return 0.0f;
+    }
+    float raw = current + delta;
+    if (raw > max_v) return allow_off ? 0.0f : min_active;
+    if (raw < min_active) return allow_off ? 0.0f : max_v;
+    return raw;
+}
+
+bool settings_sync_pulse_chain(void)
+{
+    bool changed = false;
+    if (g_settings.t <= 0.0f) {
+        if (g_settings.p2 != 0.0f) { g_settings.p2 = 0.0f; changed = true; }
+        if (g_settings.p3 != 0.0f) { g_settings.p3 = 0.0f; changed = true; }
+        if (g_settings.p4 != 0.0f) { g_settings.p4 = 0.0f; changed = true; }
+    } else if (g_settings.p3 <= 0.0f && g_settings.p4 != 0.0f) {
+        g_settings.p4 = 0.0f;
+        changed = true;
+    }
+    return changed;
+}
+
+float settings_clamp_param(float value, float min_active, float max_v,
+                           bool allow_off)
+{
+    if (allow_off && value <= 0.0f) return 0.0f;
+    if (value < min_active) return min_active;
+    if (value > max_v) return max_v;
+    return value;
 }

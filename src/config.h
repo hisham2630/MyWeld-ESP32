@@ -183,15 +183,15 @@
 // Pulse Parameters (4-pulse system: P1 → T → P2 → T → P3 → T → P4)
 // ============================================================================
 #define PULSE_HW_MIN_MS      1.0f     // Absolute hardware floor (BLE validation)
-#define PULSE_MIN_MS         5.0f     // UI slider minimum (ms)
+#define PULSE_MIN_MS         5.0f     // UI minimum (ms)
 #define PULSE_MAX_MS         50.0f    // Maximum pulse duration (ms)
-#define PULSE_STEP_MS        5.0f     // Step size for pulse adjustment
+#define PULSE_STEP_MS        1.0f     // Step size for pulse adjustment
 #define PULSE_OFF_VALUE      0.0f     // Special "disabled" value for P2/P3/P4
 
 // Shared pause (T) between consecutive pulses
-#define PAUSE_MIN_MS         20.0f    // Minimum pause when active (ms)
+#define PAUSE_MIN_MS         5.0f     // Minimum pause when active (ms)
 #define PAUSE_MAX_MS         150.0f   // Maximum pause (ms)
-#define PAUSE_STEP_MS        5.0f     // Step size for pause adjustment
+#define PAUSE_STEP_MS        1.0f     // Step size for pause adjustment
 
 // Factory defaults
 #define PULSE_DEFAULT_P1     5.0f     // Default P1 (ms) — always active
@@ -216,13 +216,17 @@
 #define PROTECT_CONFIRM_MS   1500     // Confirm protection fault before blocking
 #define CHARGER_SETTLE_US    500      // Settle time before/after pulse (microseconds)
 #define POST_PULSE_CHARGE_DELAY_MS 500 // Charge hold-off after pulse ends (ms)
+#define POST_PULSE_V_BLANK_MS 800     // Ignore supercap sag (ESR) after pulse so low-V voice is not a false alarm
 #define NVS_SAVE_DEBOUNCE_MS 2000     // Debounce NVS writes (prevent flash wear)
 #define ADC_SAMPLE_INTERVAL  500      // ADC sampling interval (ms) for voltage graph
 
 // Encoder tuning
-#define ENC_STEPS_PER_DETENT     5      // Gray-code micro-steps per physical detent click
+#define ENC_STEPS_PER_DETENT     4      // Gray-code micro-steps per physical detent (KY-040)
 #define ENC_KEY_DEBOUNCE_MS      30     // Button debounce (30ms: fast taps, still filters bounce)
 #define ENC_LONG_PRESS_MS        500    // Long press threshold
+#define ENC_ACCEL_2X_US          80000   // Spin faster than this → 2× value steps
+#define ENC_ACCEL_5X_US          40000   // 5×
+#define ENC_ACCEL_10X_US         20000   // 10× (coarse sweep while spinning)
 
 // ============================================================================
 // I2S Audio Configuration
@@ -258,7 +262,7 @@
 typedef struct {
     char  name[PRESET_NAME_LEN]; 
     float p1;                    // Pulse 1 / warm-up (ms) — 5–50, P1 ≤ P2
-    float t;                     // Shared pause between pulses (ms), 20–150
+    float t;                     // Shared pause between pulses (ms), 0 or 5–150
     float p2;                    // Pulse 2 / main weld (ms) — 5–50, peak
     float p3;                    // Pulse 3 / forge (ms) — 5–50, P3 ≤ P2
     float p4;                    // Pulse 4 / temper (ms) — 5–50, P4 ≤ P3
@@ -322,8 +326,8 @@ typedef struct {
 // ============================================================================
 #define FW_VERSION_MAJOR     1
 #define FW_VERSION_MINOR     0
-#define FW_VERSION_PATCH     68
-#define FW_VERSION_STRING    "1.0.68"
+#define FW_VERSION_PATCH     72
+#define FW_VERSION_STRING    "1.0.72"
 #define FW_BUILD_DATE        __DATE__
 #define FW_BUILD_TIME        __TIME__
 

@@ -122,16 +122,9 @@ void ui_stub_refresh_display(void)
     }
 
     // ── Normal dashboard ──
-    // Calculate charge percentage (0–100) from voltage
+    // Charge 0–100 as voltage / max (same formula as TFT and BLE)
     float v = s_voltage;
-    float max_v = settings_get_max_voltage();
-    uint8_t pct = 0;
-    if (max_v > 0.1f) {
-        float ratio = v / max_v;
-        if (ratio > 1.0f) ratio = 1.0f;
-        if (ratio < 0.0f) ratio = 0.0f;
-        pct = (uint8_t)(ratio * 100.0f);
-    }
+    uint8_t pct = settings_get_charge_percent(v);
 
     // Build status text from weld state
     const char *status = welding_state_str((weld_state_t)s_weld_state);

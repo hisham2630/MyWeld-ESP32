@@ -10,7 +10,7 @@
  * 
  * Main Screen:
  *   - Status bar (voltage, mode, BLE status)
- *   - P1/T/P2 parameter cards with +/- buttons (0.5ms steps)
+ *   - P1/T/P2 parameter wheels (1ms steps, tap value for keypad)
  *   - S value (AUTO mode only)
  *   - Color-coded voltage bar (0–5.7V)
  *   - Live voltage history graph (30 seconds)

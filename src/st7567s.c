@@ -390,16 +390,17 @@ typedef enum { COG_ENC_NAV, COG_ENC_EDIT } cog_enc_mode_t;
 
 typedef struct {
     float min_val, max_val, step;
+    bool  allow_off;
 } cog_focus_meta_t;
 
 static const cog_focus_meta_t s_focus_meta[COG_FOCUS_COUNT] = {
-    {PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS},  // P1
-    {PAUSE_MIN_MS, PAUSE_MAX_MS, PAUSE_STEP_MS},  // T
-    {PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS},  // P2
-    {PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS},  // P3
-    {PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS},  // P4
-    {S_VALUE_MIN,  S_VALUE_MAX,  S_VALUE_STEP},   // S
-    {0, 0, 0},                                     // MODE
+    {PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS, false},  // P1
+    {PAUSE_MIN_MS, PAUSE_MAX_MS, PAUSE_STEP_MS, true},   // T
+    {PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS, true},   // P2
+    {PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS, true},   // P3
+    {PULSE_MIN_MS, PULSE_MAX_MS, PULSE_STEP_MS, true},   // P4
+    {S_VALUE_MIN,  S_VALUE_MAX,  S_VALUE_STEP,  false},  // S
+    {0, 0, 0, false},                                    // MODE
 };
 
 static int            s_enc_focus = -1;
@@ -481,15 +482,16 @@ static void cog_handle_encoder(encoder_event_t evt) {
             s_blink_tick = 0; audio_play_beep();
         } else {
             int dir = (evt == ENC_EVENT_CW) ? 1 : -1;
+            int accel = encoder_accel_mult();
             int real = cog_logical_to_real(s_enc_focus);
             float *val = cog_get_value_ptr(real);
             if (val) {
                 const cog_focus_meta_t *m = &s_focus_meta[real];
-                *val += dir * m->step;
-                if (*val > m->max_val) *val = m->max_val;
-                if (*val < m->min_val) *val = m->min_val;
+                *val = settings_nudge_param(*val, dir * m->step * accel, m->min_val,
+                                            m->max_val, m->allow_off);
+                settings_sync_pulse_chain();
             }
-            audio_play_beep();
+            if (accel <= 1) audio_play_beep();
         }
     }
 }
@@ -784,8 +786,10 @@ static void cog_update_task(void *pvParams) {
 
     while (1) {
         // Poll encoder
+        bool enc_activity = false;
         encoder_event_t enc_evt;
         while (encoder_poll(&enc_evt)) {
+            enc_activity = true;
             if (s_screen == COG_SCREEN_MAIN) {
                 if (enc_evt == ENC_EVENT_LONG_PRESS) {
                     s_screen = COG_SCREEN_SETTINGS;
@@ -834,7 +838,8 @@ static void cog_update_task(void *pvParams) {
             ui_stub_refresh_display();
         }
 
-        vTaskDelay(pdMS_TO_TICKS(125));  // 8Hz
+        vTaskDelay(pdMS_TO_TICKS(enc_activity ? 15 : 125));
+    }
     }
 }
 

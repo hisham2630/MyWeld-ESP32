@@ -33,6 +33,7 @@
 #include "settings.h"
 #include "welding.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "UI";
@@ -170,17 +171,32 @@ static lv_obj_t *s_dd_preset = NULL;     // Preset dropdown (settings screen)
 typedef struct {
   lv_obj_t *card;
   lv_obj_t *label_name;
-  lv_obj_t *label_value;
-  lv_obj_t *btn_minus;
-  lv_obj_t *btn_plus;
-  float *value_ptr; // Points to g_settings.p1, .t, .p2, or .s_value
+  lv_obj_t *roller;
+  float *value_ptr;
   float min_val;
   float max_val;
   float step;
   const char *unit;
+  bool allow_off;
+  uint16_t press_sel;
 } param_card_t;
 
 static param_card_t card_p1, card_t, card_p2, card_p3, card_p4, card_s;
+
+static char s_opts_pulse[192];
+static char s_opts_pulse_off[208];
+static char s_opts_pause[640];
+static char s_opts_s[96];
+static bool s_syncing_roller = false;
+
+static lv_obj_t *s_keypad = NULL;
+static lv_obj_t *s_keypad_ta = NULL;
+static param_card_t *s_keypad_card = NULL;
+
+static void update_dashboard_layout(void);
+static void param_sync_roller(param_card_t *p);
+static void keypad_open(param_card_t *card);
+static void keypad_close(void);
 
 // ============================================================================
 // Encoder Navigation State
@@ -248,13 +264,225 @@ static lv_color_t get_voltage_color(float v) {
   return lv_color_hex(0x660000);
 }
 
-static void format_ms_value(char *buf, size_t len, float val) {
-  if (val == 0.0f) {
-    snprintf(buf, len, "OFF");
-  } else if (val == (int)val) {
-    snprintf(buf, len, "%dms", (int)val);
+static void build_int_options(char *buf, size_t buflen, int min_v, int max_v,
+                              bool allow_off) {
+  size_t n = 0;
+  if (allow_off && buflen > 4) {
+    n = (size_t)snprintf(buf, buflen, "OFF");
+  } else if (buflen > 0) {
+    buf[0] = '\0';
+  }
+  for (int v = min_v; v <= max_v && n + 8 < buflen; v++) {
+    if (n > 0) {
+      buf[n++] = '\n';
+      buf[n] = '\0';
+    }
+    n += (size_t)snprintf(buf + n, buflen - n, "%d", v);
+  }
+}
+
+static void build_wheel_options(void) {
+  build_int_options(s_opts_pulse, sizeof(s_opts_pulse), (int)PULSE_MIN_MS,
+                    (int)PULSE_MAX_MS, false);
+  build_int_options(s_opts_pulse_off, sizeof(s_opts_pulse_off),
+                    (int)PULSE_MIN_MS, (int)PULSE_MAX_MS, true);
+  build_int_options(s_opts_pause, sizeof(s_opts_pause), (int)PAUSE_MIN_MS,
+                    (int)PAUSE_MAX_MS, true);
+  size_t n = 0;
+  for (int i = (int)(S_VALUE_MIN * 10.0f); i <= (int)(S_VALUE_MAX * 10.0f); i++) {
+    if (n > 0 && n + 1 < sizeof(s_opts_s)) {
+      s_opts_s[n++] = '\n';
+    }
+    n += (size_t)snprintf(s_opts_s + n, sizeof(s_opts_s) - n, "%d.%d", i / 10,
+                          i % 10);
+  }
+}
+
+static uint16_t value_to_roller_index(const param_card_t *c) {
+  float v = *c->value_ptr;
+  if (c->unit[0] == 's') {
+    int idx = (int)((v - c->min_val) / c->step + 0.5f);
+    if (idx < 0) idx = 0;
+    int max_idx = (int)((c->max_val - c->min_val) / c->step + 0.5f);
+    if (idx > max_idx) idx = max_idx;
+    return (uint16_t)idx;
+  }
+  int iv = (int)(v + 0.5f);
+  if (c->allow_off) {
+    if (iv <= 0) return 0;
+    int idx = iv - (int)c->min_val + 1;
+    if (idx < 1) idx = 1;
+    int max_idx = (int)c->max_val - (int)c->min_val + 1;
+    if (idx > max_idx) idx = max_idx;
+    return (uint16_t)idx;
+  }
+  int idx = iv - (int)c->min_val;
+  if (idx < 0) idx = 0;
+  int max_idx = (int)c->max_val - (int)c->min_val;
+  if (idx > max_idx) idx = max_idx;
+  return (uint16_t)idx;
+}
+
+static float roller_index_to_value(const param_card_t *c, uint16_t idx) {
+  if (c->unit[0] == 's') {
+    return c->min_val + (float)idx * c->step;
+  }
+  if (c->allow_off) {
+    if (idx == 0) return 0.0f;
+    return c->min_val + (float)(idx - 1);
+  }
+  return c->min_val + (float)idx;
+}
+
+static void param_sync_roller(param_card_t *p) {
+  if (!p || !p->roller) return;
+  s_syncing_roller = true;
+  lv_roller_set_selected(p->roller, value_to_roller_index(p), LV_ANIM_OFF);
+  s_syncing_roller = false;
+}
+
+static void param_sync_all_rollers(void) {
+  param_sync_roller(&card_p1);
+  param_sync_roller(&card_t);
+  param_sync_roller(&card_p2);
+  param_sync_roller(&card_p3);
+  param_sync_roller(&card_p4);
+  param_sync_roller(&card_s);
+}
+
+static void param_apply_value(param_card_t *card, float v, bool save) {
+  *card->value_ptr = settings_clamp_param(v, card->min_val, card->max_val,
+                                          card->allow_off);
+  settings_sync_pulse_chain();
+  param_sync_roller(card);
+  param_sync_roller(&card_p2);
+  param_sync_roller(&card_p3);
+  param_sync_roller(&card_p4);
+  if (save) settings_save();
+  update_dashboard_layout();
+}
+
+static void keypad_close(void) {
+  if (s_keypad) {
+    lv_obj_del(s_keypad);
+    s_keypad = NULL;
+    s_keypad_ta = NULL;
+    s_keypad_card = NULL;
+  }
+}
+
+static void keypad_apply(void) {
+  if (!s_keypad_card || !s_keypad_ta) {
+    keypad_close();
+    return;
+  }
+  const char *txt = lv_textarea_get_text(s_keypad_ta);
+  float v = (txt && txt[0]) ? strtof(txt, NULL) : 0.0f;
+  param_apply_value(s_keypad_card, v, true);
+  audio_play_beep();
+  keypad_close();
+}
+
+static void keypad_event_cb(lv_event_t *e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_READY) {
+    keypad_apply();
+  } else if (code == LV_EVENT_CANCEL) {
+    keypad_close();
+  }
+}
+
+static void keypad_open(param_card_t *card) {
+  if (!card) return;
+  keypad_close();
+  s_keypad_card = card;
+
+  s_keypad = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(s_keypad, UI_SCR_W, UI_SCR_H);
+  lv_obj_set_pos(s_keypad, 0, 0);
+  lv_obj_set_style_bg_color(s_keypad, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_bg_opa(s_keypad, LV_OPA_80, 0);
+  lv_obj_set_style_border_width(s_keypad, 0, 0);
+  lv_obj_set_style_pad_all(s_keypad, 8, 0);
+  lv_obj_set_style_radius(s_keypad, 0, 0);
+  lv_obj_clear_flag(s_keypad, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *title = lv_label_create(s_keypad);
+  lv_label_set_text(title, lv_label_get_text(card->label_name));
+  lv_obj_set_style_text_color(title, COLOR_TEXT_LIGHT, 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
+
+  s_keypad_ta = lv_textarea_create(s_keypad);
+  lv_obj_set_size(s_keypad_ta, 200, 44);
+  lv_obj_align(s_keypad_ta, LV_ALIGN_TOP_MID, 0, 36);
+  lv_textarea_set_one_line(s_keypad_ta, true);
+  lv_textarea_set_max_length(s_keypad_ta, 6);
+  lv_textarea_set_accepted_chars(s_keypad_ta, "0123456789.");
+  lv_obj_set_style_text_font(s_keypad_ta, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_align(s_keypad_ta, LV_TEXT_ALIGN_CENTER, 0);
+
+  char buf[16];
+  if (card->unit[0] == 's') {
+    snprintf(buf, sizeof(buf), "%.1f", *card->value_ptr);
   } else {
-    snprintf(buf, len, "%.1fms", val);
+    snprintf(buf, sizeof(buf), "%d", (int)(*card->value_ptr + 0.5f));
+  }
+  lv_textarea_set_text(s_keypad_ta, buf);
+
+  lv_obj_t *hint = lv_label_create(s_keypad);
+  if (card->allow_off) {
+    lv_label_set_text_fmt(hint, "0 = OFF, or %d-%d %s", (int)card->min_val,
+                          (int)card->max_val, card->unit);
+  } else if (card->unit[0] == 's') {
+    lv_label_set_text_fmt(hint, "%.1f-%.1f %s", card->min_val, card->max_val,
+                          card->unit);
+  } else {
+    lv_label_set_text_fmt(hint, "%d-%d %s", (int)card->min_val,
+                          (int)card->max_val, card->unit);
+  }
+  lv_obj_set_style_text_color(hint, COLOR_TEXT_DIM, 0);
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 86);
+
+#if (UI_SCR_H >= 300)
+  int kb_h = 170;
+#else
+  int kb_h = 140;
+#endif
+  lv_obj_t *kb = lv_keyboard_create(s_keypad);
+  lv_obj_set_size(kb, UI_SCR_W - 16, kb_h);
+  lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
+  lv_keyboard_set_textarea(kb, s_keypad_ta);
+  lv_obj_add_event_cb(kb, keypad_event_cb, LV_EVENT_READY, NULL);
+  lv_obj_add_event_cb(kb, keypad_event_cb, LV_EVENT_CANCEL, NULL);
+
+  lv_obj_add_event_cb(s_keypad_ta, keypad_event_cb, LV_EVENT_READY, NULL);
+}
+
+static void roller_event_cb(lv_event_t *e) {
+  param_card_t *card = (param_card_t *)lv_event_get_user_data(e);
+  if (!card) return;
+  lv_event_code_t code = lv_event_get_code(e);
+
+  if (code == LV_EVENT_PRESSED) {
+    card->press_sel = lv_roller_get_selected(card->roller);
+  } else if (code == LV_EVENT_CLICKED) {
+    if (lv_roller_get_selected(card->roller) == card->press_sel) {
+      keypad_open(card);
+    }
+  } else if (code == LV_EVENT_VALUE_CHANGED) {
+    if (s_syncing_roller) return;
+    uint16_t sel = lv_roller_get_selected(card->roller);
+    *card->value_ptr = roller_index_to_value(card, sel);
+    settings_sync_pulse_chain();
+    param_sync_roller(&card_p2);
+    param_sync_roller(&card_p3);
+    param_sync_roller(&card_p4);
+    audio_play_beep();
+    settings_save();
+    update_dashboard_layout();
   }
 }
 
@@ -366,18 +594,6 @@ static void enc_set_focus(int index) {
     enc_update_focus_visual();
 }
 
-// Update a param card's displayed value from its value_ptr
-static void enc_refresh_param_label(param_card_t *p) {
-    if (!p || !p->label_value) return;
-    char buf[16];
-    if (p->unit[0] == 's') {
-        snprintf(buf, sizeof(buf), "%.1f%s", *p->value_ptr, p->unit);
-    } else {
-        format_ms_value(buf, sizeof(buf), *p->value_ptr);
-    }
-    lv_label_set_text(p->label_value, buf);
-}
-
 // ============================================================================
 // Encoder Event Handler
 // ============================================================================
@@ -480,26 +696,34 @@ static void enc_handle_event(encoder_event_t evt) {
             audio_play_beep();
         } else if (evt == ENC_EVENT_CW || evt == ENC_EVENT_CCW) {
             int dir = (evt == ENC_EVENT_CW) ? 1 : -1;
+            int accel = encoder_accel_mult();
 
             switch (fi->type) {
                 case FTYPE_PARAM: {
                     param_card_t *p = fi->param;
                     if (!p) break;
-                    *p->value_ptr += dir * p->step;
-                    if (*p->value_ptr > p->max_val) *p->value_ptr = p->max_val;
-                    if (*p->value_ptr < p->min_val) *p->value_ptr = p->min_val;
-                    enc_refresh_param_label(p);
-                    audio_play_beep();
+                    *p->value_ptr = settings_nudge_param(*p->value_ptr, dir * p->step * accel,
+                                                         p->min_val, p->max_val,
+                                                         p->allow_off);
+                    settings_sync_pulse_chain();
+                    param_sync_roller(p);
+                    param_sync_roller(&card_p2);
+                    param_sync_roller(&card_p3);
+                    param_sync_roller(&card_p4);
+                    if (p == &card_t || p == &card_p3 || p == &card_p4) {
+                        update_dashboard_layout();
+                    }
+                    if (accel <= 1) audio_play_beep();
                     break;
                 }
                 case FTYPE_SLIDER: {
                     lv_obj_t *slider = fi->widget;
-                    int32_t val = lv_slider_get_value(slider) + dir * fi->slider_step;
+                    int32_t val = lv_slider_get_value(slider) + dir * fi->slider_step * accel;
                     int32_t mn = lv_slider_get_min_value(slider);
                     int32_t mx = lv_slider_get_max_value(slider);
                     if (val < mn) val = mn;
                     if (val > mx) val = mx;
-                    lv_slider_set_value(slider, val, LV_ANIM_ON);
+                    lv_slider_set_value(slider, val, LV_ANIM_OFF);
                     lv_obj_send_event(slider, LV_EVENT_VALUE_CHANGED, NULL);
                     break;
                 }
@@ -526,44 +750,18 @@ static void enc_handle_event(encoder_event_t evt) {
 // ============================================================================
 
 
-static void param_btn_cb(lv_event_t *e) {
-  param_card_t *card = (param_card_t *)lv_event_get_user_data(e);
-  lv_obj_t *target = lv_event_get_target(e);
-
-  if (target == card->btn_plus) {
-    *card->value_ptr += card->step;
-    if (*card->value_ptr > card->max_val)
-      *card->value_ptr = card->max_val;
-  } else if (target == card->btn_minus) {
-    *card->value_ptr -= card->step;
-    if (*card->value_ptr < card->min_val)
-      *card->value_ptr = card->min_val;
-  }
-
-  // Update label
-  char buf[16];
-  if (card->unit[0] == 's') {
-    snprintf(buf, sizeof(buf), "%.1f%s", *card->value_ptr, card->unit);
-  } else {
-    format_ms_value(buf, sizeof(buf), *card->value_ptr);
-  }
-  lv_label_set_text(card->label_value, buf);
-
-  audio_play_beep();
-  settings_save();
-}
-
 static void create_param_card(lv_obj_t *parent, param_card_t *card,
                               const char *name, float *val_ptr, float min_v,
                               float max_v, float step, const char *unit, int x,
-                              int y, int w) {
+                              int y, int w, bool allow_off) {
   card->value_ptr = val_ptr;
   card->min_val = min_v;
   card->max_val = max_v;
   card->step = step;
   card->unit = unit;
+  card->allow_off = allow_off;
+  card->press_sel = 0;
 
-  // Card container
   card->card = lv_obj_create(parent);
   lv_obj_set_size(card->card, w, UI_CARD_H);
   lv_obj_set_pos(card->card, x, y);
@@ -571,50 +769,38 @@ static void create_param_card(lv_obj_t *parent, param_card_t *card,
   lv_obj_set_style_border_color(card->card, COLOR_ACCENT, 0);
   lv_obj_set_style_border_width(card->card, 1, 0);
   lv_obj_set_style_radius(card->card, 12, 0);
-  lv_obj_set_style_pad_all(card->card, 6, 0);
+  lv_obj_set_style_pad_all(card->card, 4, 0);
   lv_obj_clear_flag(card->card, LV_OBJ_FLAG_SCROLLABLE);
 
-  // Parameter name
   card->label_name = lv_label_create(card->card);
   lv_label_set_text(card->label_name, name);
   lv_obj_set_style_text_color(card->label_name, COLOR_TEXT_DIM, 0);
   lv_obj_set_style_text_font(card->label_name, &lv_font_montserrat_14, 0);
   lv_obj_align(card->label_name, LV_ALIGN_TOP_MID, 0, 0);
 
-  // Value
-  card->label_value = lv_label_create(card->card);
-  char buf[16];
+  const char *opts = s_opts_pulse;
   if (unit[0] == 's') {
-    snprintf(buf, sizeof(buf), "%.1f%s", *val_ptr, unit);
-  } else {
-    format_ms_value(buf, sizeof(buf), *val_ptr);
+    opts = s_opts_s;
+  } else if (allow_off && min_v == PAUSE_MIN_MS && max_v == PAUSE_MAX_MS) {
+    opts = s_opts_pause;
+  } else if (allow_off) {
+    opts = s_opts_pulse_off;
   }
-  lv_label_set_text(card->label_value, buf);
-  lv_obj_set_style_text_color(card->label_value, COLOR_TEXT_LIGHT, 0);
-  lv_obj_set_style_text_font(card->label_value, &lv_font_montserrat_24, 0);
-  lv_obj_align(card->label_value, LV_ALIGN_CENTER, 0, -2);
 
-  // Minus button – wide for touch, short to avoid covering value
-  card->btn_minus = lv_btn_create(card->card);
-  lv_obj_set_size(card->btn_minus, 48, 28);
-  lv_obj_align(card->btn_minus, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-  lv_obj_set_style_bg_color(card->btn_minus, COLOR_ACCENT, 0);
-  lv_obj_set_style_radius(card->btn_minus, 8, 0);
-  lv_obj_add_event_cb(card->btn_minus, param_btn_cb, LV_EVENT_CLICKED, card);
-  lv_obj_t *lbl_m = lv_label_create(card->btn_minus);
-  lv_label_set_text(lbl_m, LV_SYMBOL_MINUS);
-  lv_obj_center(lbl_m);
-
-  // Plus button – wide for touch, short to avoid covering value
-  card->btn_plus = lv_btn_create(card->card);
-  lv_obj_set_size(card->btn_plus, 48, 28);
-  lv_obj_align(card->btn_plus, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-  lv_obj_set_style_bg_color(card->btn_plus, COLOR_ACCENT, 0);
-  lv_obj_set_style_radius(card->btn_plus, 8, 0);
-  lv_obj_add_event_cb(card->btn_plus, param_btn_cb, LV_EVENT_CLICKED, card);
-  lv_obj_t *lbl_p = lv_label_create(card->btn_plus);
-  lv_label_set_text(lbl_p, LV_SYMBOL_PLUS);
-  lv_obj_center(lbl_p);
+  card->roller = lv_roller_create(card->card);
+  lv_roller_set_options(card->roller, opts, LV_ROLLER_MODE_INFINITE);
+  lv_roller_set_visible_row_count(card->roller, 3);
+  lv_obj_set_width(card->roller, w - 12);
+  lv_obj_align(card->roller, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_bg_opa(card->roller, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(card->roller, 0, LV_PART_MAIN);
+  lv_obj_set_style_text_color(card->roller, COLOR_TEXT_DIM, LV_PART_MAIN);
+  lv_obj_set_style_text_font(card->roller, &lv_font_montserrat_14, LV_PART_MAIN);
+  lv_obj_set_style_text_color(card->roller, COLOR_TEXT_LIGHT, LV_PART_SELECTED);
+  lv_obj_set_style_bg_color(card->roller, COLOR_ACCENT, LV_PART_SELECTED);
+  lv_obj_set_style_text_font(card->roller, &lv_font_montserrat_20, LV_PART_SELECTED);
+  lv_obj_add_event_cb(card->roller, roller_event_cb, LV_EVENT_ALL, card);
+  param_sync_roller(card);
 }
 
 // ============================================================================
@@ -816,35 +1002,38 @@ static void create_main_screen(void) {
 
 
   // ── Parameter Cards ──────────────────────────────
+  build_wheel_options();
   int card_y = UI_CONTENT_Y;
   int card_w = 148;
   int gap = UI_CARD_GAP;
 
   create_param_card(scr_main, &card_p1, "PULSE 1", &g_settings.p1, PULSE_MIN_MS,
-                    PULSE_MAX_MS, PULSE_STEP_MS, "ms", gap, card_y, card_w);
+                    PULSE_MAX_MS, PULSE_STEP_MS, "ms", gap, card_y, card_w,
+                    false);
 
   create_param_card(scr_main, &card_t, "PAUSE", &g_settings.t, PAUSE_MIN_MS,
                     PAUSE_MAX_MS, PAUSE_STEP_MS, "ms", gap + card_w + gap,
-                    card_y, card_w);
+                    card_y, card_w, true);
 
   create_param_card(scr_main, &card_p2, "PULSE 2", &g_settings.p2, PULSE_MIN_MS,
                     PULSE_MAX_MS, PULSE_STEP_MS, "ms", gap + (card_w + gap) * 2,
-                    card_y, card_w);
+                    card_y, card_w, true);
 
   // ── Row 2: P3 (Forge) and P4 (Temper) — only shown when value > 0 ──
   int row2_y = card_y + UI_CARD_STRIDE;
 
   create_param_card(scr_main, &card_p3, "FORGE", &g_settings.p3, PULSE_MIN_MS,
-                    PULSE_MAX_MS, PULSE_STEP_MS, "ms", gap, row2_y, card_w);
+                    PULSE_MAX_MS, PULSE_STEP_MS, "ms", gap, row2_y, card_w,
+                    true);
 
   create_param_card(scr_main, &card_p4, "TEMPER", &g_settings.p4, PULSE_MIN_MS,
                     PULSE_MAX_MS, PULSE_STEP_MS, "ms", gap + card_w + gap,
-                    row2_y, card_w);
+                    row2_y, card_w, true);
 
   // S value card (AUTO mode only — position set by update_dashboard_layout)
   create_param_card(scr_main, &card_s, "DELAY (S)", &g_settings.s_value,
                     S_VALUE_MIN, S_VALUE_MAX, S_VALUE_STEP, "s", gap,
-                    row2_y + 96, 220);
+                    row2_y + 96, 220, false);
 
   // Apply initial visibility for all cards based on mode
   update_dashboard_layout();
@@ -1069,20 +1258,8 @@ static void preset_dropdown_cb(lv_event_t *e) {
     settings_load_preset(sel - 1);
   }
 
-  // Sync card labels from g_settings (may have changed from preset load)
-  char buf[16];
-  format_ms_value(buf, sizeof(buf), g_settings.p1);
-  lv_label_set_text(card_p1.label_value, buf);
-  format_ms_value(buf, sizeof(buf), g_settings.t);
-  lv_label_set_text(card_t.label_value, buf);
-  format_ms_value(buf, sizeof(buf), g_settings.p2);
-  lv_label_set_text(card_p2.label_value, buf);
-  format_ms_value(buf, sizeof(buf), g_settings.p3);
-  lv_label_set_text(card_p3.label_value, buf);
-  format_ms_value(buf, sizeof(buf), g_settings.p4);
-  lv_label_set_text(card_p4.label_value, buf);
-  snprintf(buf, sizeof(buf), "%.1fs", g_settings.s_value);
-  lv_label_set_text(card_s.label_value, buf);
+  // Sync wheels from g_settings (may have changed from preset load)
+  param_sync_all_rollers();
 
   // Refresh dashboard layout (show/hide cards based on mode and values)
   update_dashboard_layout();
@@ -1390,9 +1567,7 @@ void ui_task(void *pvParameters) {
         case UI_MSG_VOLTAGE: {
           if (!lbl_voltage || !bar_voltage) break;
           float voltage = msg.voltage;
-          float pct = (voltage / settings_get_max_voltage()) * 100.0f;
-          if (pct < 0)   pct = 0;
-          if (pct > 100) pct = 100;
+          float pct = (float)settings_get_charge_percent(voltage);
           lv_label_set_text_fmt(lbl_voltage, "%.1fV", voltage);
           lv_label_set_text_fmt(lbl_voltage_pct, "%d%%", (int)pct);
           lv_bar_set_value(bar_voltage, (int)pct, LV_ANIM_OFF);
@@ -1448,32 +1623,8 @@ void ui_task(void *pvParameters) {
         }
 
         case UI_MSG_REFRESH_PARAMS: {
-          // Sync P1/T/P2/S labels from g_settings (triggered by BLE write)
-          char buf[16];
-          if (card_p1.label_value) {
-            format_ms_value(buf, sizeof(buf), g_settings.p1);
-            lv_label_set_text(card_p1.label_value, buf);
-          }
-          if (card_t.label_value) {
-            format_ms_value(buf, sizeof(buf), g_settings.t);
-            lv_label_set_text(card_t.label_value, buf);
-          }
-          if (card_p2.label_value) {
-            format_ms_value(buf, sizeof(buf), g_settings.p2);
-            lv_label_set_text(card_p2.label_value, buf);
-          }
-          if (card_p3.label_value) {
-            format_ms_value(buf, sizeof(buf), g_settings.p3);
-            lv_label_set_text(card_p3.label_value, buf);
-          }
-          if (card_p4.label_value) {
-            format_ms_value(buf, sizeof(buf), g_settings.p4);
-            lv_label_set_text(card_p4.label_value, buf);
-          }
-          if (card_s.label_value) {
-            snprintf(buf, sizeof(buf), "%.1fs", g_settings.s_value);
-            lv_label_set_text(card_s.label_value, buf);
-          }
+          // Sync P1/T/P2/S wheels from g_settings (triggered by BLE write)
+          param_sync_all_rollers();
           // Sync mode label
           if (lbl_mode) {
             lv_label_set_text(lbl_mode, g_settings.auto_mode ? "AUTO" : "MAN");

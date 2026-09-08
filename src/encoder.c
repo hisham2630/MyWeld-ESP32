@@ -7,7 +7,7 @@
  *           Contact bounce produces no false events because invalid
  *           state transitions (e.g. 11→00) are silently discarded.
  *
- * Button:   Polled in encoder_poll() with 50ms debounce.
+ * Button:   Polled in encoder_poll() with ENC_KEY_DEBOUNCE_MS debounce.
  *           Short press (<500ms) and long press (≥500ms) detection.
  *
  * Safety:   Runs entirely on Core 0. Cannot affect welding (Core 1).
@@ -29,7 +29,12 @@ static const char *TAG = "ENCODER";
 // Internal state
 // ============================================================================
 
-#define ENC_QUEUE_DEPTH 8
+#define ENC_QUEUE_DEPTH 32
+
+typedef struct {
+    encoder_event_t evt;
+    uint32_t interval_us;   // Time since previous detent (rotation only)
+} enc_qitem_t;
 
 static QueueHandle_t s_enc_queue = NULL;
 
@@ -49,7 +54,8 @@ static QueueHandle_t s_enc_queue = NULL;
 //    0 = no change  OR  invalid skip (bounce/noise) → ignored
 //
 // The accumulator counts valid micro-steps. Only when it reaches
-// ±ENC_STEPS_PER_DETENT (typically 4) is a single CW/CCW event emitted.
+// ±ENC_STEPS_PER_DETENT (4 on a KY-040) is a single CW/CCW event emitted.
+// Remainder is kept so bounce leftover still counts toward the next detent.
 // This makes the decoder inherently immune to contact bounce because:
 //   - Bounce on one pin oscillates between two adjacent states (e.g. 3↔2),
 //     producing +1 then -1, so the accumulator stays near zero.
@@ -59,6 +65,9 @@ static QueueHandle_t s_enc_queue = NULL;
 
 static volatile uint8_t s_enc_state = 3;   // Rest: both pins HIGH (pull-up)
 static volatile int8_t  s_enc_accum = 0;   // Micro-step accumulator
+static volatile int64_t s_last_detent_us = 0;
+static volatile int8_t  s_last_rot_dir = 0;  // +1 CW, -1 CCW
+static uint32_t s_poll_interval_us = UINT32_MAX;
 
 // Must live in DRAM for ISR access (not flash)
 static const DRAM_ATTR int8_t s_quad_table[16] = {
@@ -100,20 +109,37 @@ static void IRAM_ATTR enc_quadrature_isr(void *arg)
 
     s_enc_accum += dir;
 
-    // Full detent reached?
+    // Full detent reached? Keep remainder (don't snap to 0).
+    encoder_event_t evt = ENC_EVENT_CW;
+    int8_t emit_dir = 0;
     if (s_enc_accum >= ENC_STEPS_PER_DETENT) {
-        s_enc_accum = 0;
-        encoder_event_t evt = ENC_EVENT_CW;
-        BaseType_t woken = pdFALSE;
-        xQueueSendFromISR(s_enc_queue, &evt, &woken);
-        if (woken) portYIELD_FROM_ISR();
+        s_enc_accum = (int8_t)(s_enc_accum - ENC_STEPS_PER_DETENT);
+        evt = ENC_EVENT_CW;
+        emit_dir = 1;
     } else if (s_enc_accum <= -ENC_STEPS_PER_DETENT) {
-        s_enc_accum = 0;
-        encoder_event_t evt = ENC_EVENT_CCW;
-        BaseType_t woken = pdFALSE;
-        xQueueSendFromISR(s_enc_queue, &evt, &woken);
-        if (woken) portYIELD_FROM_ISR();
+        s_enc_accum = (int8_t)(s_enc_accum + ENC_STEPS_PER_DETENT);
+        evt = ENC_EVENT_CCW;
+        emit_dir = -1;
     }
+    if (emit_dir == 0) return;
+
+    int64_t now = esp_timer_get_time();
+    uint32_t interval = UINT32_MAX;
+    if (s_last_detent_us != 0 && emit_dir == s_last_rot_dir) {
+        int64_t dt = now - s_last_detent_us;
+        if (dt > 0 && dt < (int64_t)UINT32_MAX) {
+            interval = (uint32_t)dt;
+        }
+    }
+    s_last_detent_us = now;
+    s_last_rot_dir = emit_dir;
+
+    enc_qitem_t item;
+    item.evt = evt;
+    item.interval_us = interval;
+    BaseType_t woken = pdFALSE;
+    xQueueSendFromISR(s_enc_queue, &item, &woken);
+    if (woken) portYIELD_FROM_ISR();
 }
 
 // Button ISR: fires on falling edge (button press, active LOW)
@@ -130,7 +156,7 @@ static void IRAM_ATTR enc_key_isr(void *arg)
 void encoder_init(void)
 {
     // Create event queue
-    s_enc_queue = xQueueCreate(ENC_QUEUE_DEPTH, sizeof(encoder_event_t));
+    s_enc_queue = xQueueCreate(ENC_QUEUE_DEPTH, sizeof(enc_qitem_t));
     if (!s_enc_queue) {
         ESP_LOGE(TAG, "Failed to create encoder queue!");
         return;
@@ -193,7 +219,12 @@ bool encoder_poll(encoder_event_t *event)
     if (!s_enc_queue) return false;
 
     // 1) Check rotation queue first (ISR-produced events)
-    if (xQueueReceive(s_enc_queue, event, 0) == pdTRUE) {
+    enc_qitem_t item;
+    if (xQueueReceive(s_enc_queue, &item, 0) == pdTRUE) {
+        *event = item.evt;
+        if (item.evt == ENC_EVENT_CW || item.evt == ENC_EVENT_CCW) {
+            s_poll_interval_us = item.interval_us;
+        }
         return true;
     }
 
@@ -245,5 +276,14 @@ bool encoder_poll(encoder_event_t *event)
     }
 
     return false;
+}
+
+int encoder_accel_mult(void)
+{
+    uint32_t us = s_poll_interval_us;
+    if (us < ENC_ACCEL_10X_US) return 10;
+    if (us < ENC_ACCEL_5X_US)  return 5;
+    if (us < ENC_ACCEL_2X_US)  return 2;
+    return 1;
 }
 

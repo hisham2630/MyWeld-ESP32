@@ -75,6 +75,21 @@ static int64_t s_man_lockout_us = 0;
 static int64_t s_cooldown_start_us = 0;
 static bool s_charger_holdoff = false;
 
+// Hold last pre-pulse supercap voltage through the pulse and a short recovery
+// window. A strong weld sags the bus (ESR / wiring), which is not a real
+// undervoltage — feeding that dip into the EMA would trip the low-V / weak-weld voice.
+static int64_t s_v_blank_until_us = 0;
+
+static bool supercap_v_blanking(void)
+{
+    weld_state_t st = g_weld_state;
+    if (st >= WELD_STATE_PRE_FIRE && st <= WELD_STATE_COOLDOWN) {
+        return true;
+    }
+    return s_v_blank_until_us != 0 &&
+           esp_timer_get_time() < s_v_blank_until_us;
+}
+
 // Voltage-based charge cutoff (overcharge protection)
 // Charger disabled at SUPERCAP_MAX_V, re-enabled at SUPERCAP_FULL_V (hysteresis)
 static bool s_charger_cutoff = false;
@@ -265,6 +280,7 @@ void welding_fire_pulse(void)
     //    This does NOT block new welds — the state goes to IDLE immediately
     s_cooldown_start_us = esp_timer_get_time();
     s_charger_holdoff = true;
+    s_v_blank_until_us = s_cooldown_start_us + (int64_t)POST_PULSE_V_BLANK_MS * 1000;
     g_weld_state = WELD_STATE_IDLE;
 
     // 7. Post-pulse: update counters and feedback
@@ -344,68 +360,71 @@ void welding_task(void *pvParameters)
             }
         }
 
-        // Check supercap voltage
+        // Check supercap voltage (skip while the post-pulse sag blanking window
+        // is open — ADC also holds the last good EMA, this is belt-and-suspenders)
         float cap_v = weld_status_snapshot().supercap_voltage;
-        float weak_thresh = settings_get_weak_warn();
-        float block_thresh = settings_get_low_block();
-        bool warn = (cap_v < weak_thresh && cap_v > 0.1f);
-        taskENTER_CRITICAL(&g_weld_status_mux);
-        g_weld_status.low_voltage_warn = warn;
-        taskEXIT_CRITICAL(&g_weld_status_mux);
+        if (!supercap_v_blanking()) {
+            float weak_thresh = settings_get_weak_warn();
+            float block_thresh = settings_get_low_block();
+            bool warn = (cap_v < weak_thresh && cap_v > 0.1f);
+            taskENTER_CRITICAL(&g_weld_status_mux);
+            g_weld_status.low_voltage_warn = warn;
+            taskEXIT_CRITICAL(&g_weld_status_mux);
 
-        // Weak-weld advisory (e.g. 5.0 V) — welding still allowed above block threshold
-        if (cap_v < weak_thresh && cap_v >= block_thresh && cap_v > 0.1f) {
-            if (s_weak_v_start_us == 0) {
-                s_weak_v_start_us = esp_timer_get_time();
-            } else if ((esp_timer_get_time() - s_weak_v_start_us) > (LOW_V_CONFIRM_MS * 1000LL)) {
-                if (!s_weak_weld_announced) {
-                    s_weak_weld_announced = true;
-                    audio_play_weak_weld_warning();
-                    ESP_LOGW(TAG, "WEAK WELD ADVISORY: %.1fV < %.1fV", cap_v, weak_thresh);
-                }
-            }
-        } else if (cap_v >= weak_thresh + SUPERCAP_V_WEAK_HYST) {
-            s_weak_v_start_us = 0;
-            s_weak_weld_announced = false;
-        } else if (cap_v < block_thresh) {
-            s_weak_v_start_us = 0;
-        }
-
-        if (cap_v < block_thresh && cap_v > 0.1f) {
-            if (s_low_v_start_us == 0) {
-                s_low_v_start_us = esp_timer_get_time();
-            } else if ((esp_timer_get_time() - s_low_v_start_us) > (LOW_V_CONFIRM_MS * 1000LL)) {
-                bool announce = false;
-                taskENTER_CRITICAL(&g_weld_status_mux);
-                if (!g_weld_status.low_voltage_block) {
-                    g_weld_status.low_voltage_block = true;
-                    announce = !s_low_charge_announced;
-                }
-                taskEXIT_CRITICAL(&g_weld_status_mux);
-
-                if (announce) {
-                    s_low_charge_announced = true;
-                    if (g_weld_state == WELD_STATE_IDLE) {
-                        g_weld_state = WELD_STATE_BLOCKED;
-                        ui_update_weld_state(WELD_STATE_BLOCKED);
+            // Weak-weld advisory (e.g. 5.0 V) — welding still allowed above block threshold
+            if (cap_v < weak_thresh && cap_v >= block_thresh && cap_v > 0.1f) {
+                if (s_weak_v_start_us == 0) {
+                    s_weak_v_start_us = esp_timer_get_time();
+                } else if ((esp_timer_get_time() - s_weak_v_start_us) > (LOW_V_CONFIRM_MS * 1000LL)) {
+                    if (!s_weak_weld_announced) {
+                        s_weak_weld_announced = true;
+                        audio_play_weak_weld_warning();
+                        ESP_LOGW(TAG, "WEAK WELD ADVISORY: %.1fV < %.1fV", cap_v, weak_thresh);
                     }
-                    status_led_set_event(LED_EVT_LOW_VOLTAGE);
-                    audio_play_low_charge_warning();
-                    ESP_LOGW(TAG, "LOW VOLTAGE: %.1fV < %.1fV", cap_v, block_thresh);
                 }
+            } else if (cap_v >= weak_thresh + SUPERCAP_V_WEAK_HYST) {
+                s_weak_v_start_us = 0;
+                s_weak_weld_announced = false;
+            } else if (cap_v < block_thresh) {
+                s_weak_v_start_us = 0;
             }
-        } else {
-            s_low_v_start_us = 0;
-            if (weld_status_snapshot().low_voltage_block) {
-                taskENTER_CRITICAL(&g_weld_status_mux);
-                g_weld_status.low_voltage_block = false;
-                bool prot_fault = g_weld_status.protection_fault;
-                taskEXIT_CRITICAL(&g_weld_status_mux);
-                s_low_charge_announced = false;
-                if (g_weld_state == WELD_STATE_BLOCKED && !prot_fault) {
-                    g_weld_state = WELD_STATE_IDLE;
-                    ui_update_weld_state(WELD_STATE_IDLE);
-                    ESP_LOGI(TAG, "Low voltage cleared");
+
+            if (cap_v < block_thresh && cap_v > 0.1f) {
+                if (s_low_v_start_us == 0) {
+                    s_low_v_start_us = esp_timer_get_time();
+                } else if ((esp_timer_get_time() - s_low_v_start_us) > (LOW_V_CONFIRM_MS * 1000LL)) {
+                    bool announce = false;
+                    taskENTER_CRITICAL(&g_weld_status_mux);
+                    if (!g_weld_status.low_voltage_block) {
+                        g_weld_status.low_voltage_block = true;
+                        announce = !s_low_charge_announced;
+                    }
+                    taskEXIT_CRITICAL(&g_weld_status_mux);
+
+                    if (announce) {
+                        s_low_charge_announced = true;
+                        if (g_weld_state == WELD_STATE_IDLE) {
+                            g_weld_state = WELD_STATE_BLOCKED;
+                            ui_update_weld_state(WELD_STATE_BLOCKED);
+                        }
+                        status_led_set_event(LED_EVT_LOW_VOLTAGE);
+                        audio_play_low_charge_warning();
+                        ESP_LOGW(TAG, "LOW VOLTAGE: %.1fV < %.1fV", cap_v, block_thresh);
+                    }
+                }
+            } else {
+                s_low_v_start_us = 0;
+                if (weld_status_snapshot().low_voltage_block) {
+                    taskENTER_CRITICAL(&g_weld_status_mux);
+                    g_weld_status.low_voltage_block = false;
+                    bool prot_fault = g_weld_status.protection_fault;
+                    taskEXIT_CRITICAL(&g_weld_status_mux);
+                    s_low_charge_announced = false;
+                    if (g_weld_state == WELD_STATE_BLOCKED && !prot_fault) {
+                        g_weld_state = WELD_STATE_IDLE;
+                        ui_update_weld_state(WELD_STATE_IDLE);
+                        ESP_LOGI(TAG, "Low voltage cleared");
+                    }
                 }
             }
         }
@@ -594,13 +613,17 @@ void adc_task(void *pvParameters)
         float v_prot_raw = adc_read_voltage(ADC_CHANNEL_5, PROTECTION_V_MULT, g_settings.adc_cal_protection);
         float v_contact = adc_read_voltage(ADC_CHANNEL_6, 1.0f, 1.0f); // Raw 0–3.3V (no EMA — needs fast response)
 
-        // Apply EMA smoothing to voltage channels (not contact — it needs instant response)
+        // Apply EMA smoothing to voltage channels (not contact — it needs instant response).
+        // Hold the last good supercap sample during/after a pulse so ESR sag does not
+        // poison the filter (and then the low-voltage / weak-weld voice).
         if (!ema_initialized) {
             ema_cap = v_cap_raw;
             ema_prot = v_prot_raw;
             ema_initialized = true;
         } else {
-            ema_cap = ADC_EMA_ALPHA * v_cap_raw + (1.0f - ADC_EMA_ALPHA) * ema_cap;
+            if (!supercap_v_blanking()) {
+                ema_cap = ADC_EMA_ALPHA * v_cap_raw + (1.0f - ADC_EMA_ALPHA) * ema_cap;
+            }
             ema_prot = ADC_EMA_ALPHA * v_prot_raw + (1.0f - ADC_EMA_ALPHA) * ema_prot;
         }
 

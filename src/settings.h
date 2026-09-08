@@ -98,7 +98,7 @@ void settings_set_user_defined(void);
  * @param index    Preset index (0 to MAX_PRESETS-1)
  * @param name     Preset name (max PRESET_NAME_LEN-1 chars)
  * @param p1       P1 / warm-up (ms), P1 ≤ P2
- * @param t        Pause duration (ms), 20–150
+ * @param t        Pause duration (ms), 0 or 5–150
  * @param p2       P2 / main weld (ms), peak
  * @param p3       P3 / forge (ms), P3 ≤ P2
  * @param p4       P4 / temper (ms), P4 ≤ P3
@@ -145,7 +145,32 @@ float settings_get_weak_warn(void);
 /** Low voltage block — fixed SUPERCAP_V_BLOCK (4.7 V). Welding disabled below this. */
 float settings_get_low_block(void);
 
+/** Charge 0–100 as voltage / max. Same formula on LCD, TFT, and BLE. */
+uint8_t settings_get_charge_percent(float voltage);
+
 /** Contact detection threshold — based on max voltage and contact divider. */
 float settings_get_contact_threshold(void);
+
+/**
+ * Nudge a parameter by delta. When allow_off, 0 is a legal extra value
+ * (OFF / single-pulse). Crossing below min_active snaps to 0; leaving 0
+ * snaps up to min_active.
+ */
+float settings_nudge_param(float current, float delta, float min_active,
+                           float max_v, bool allow_off);
+
+/**
+ * Clamp a typed or wheel-selected value into range. 0 stays OFF when
+ * allow_off; values in (0, min_active) snap up to min_active.
+ */
+float settings_clamp_param(float value, float min_active, float max_v,
+                           bool allow_off);
+
+/**
+ * Backend pulse-chain rules. T = 0 is single-pulse: P2/P3/P4 are forced OFF.
+ * P3 = 0 also forces P4 OFF. Call after any write to T/P2/P3/P4.
+ * @return true if a value was changed
+ */
+bool settings_sync_pulse_chain(void);
 
 #endif // SETTINGS_H

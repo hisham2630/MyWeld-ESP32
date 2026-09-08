@@ -12,9 +12,10 @@
  *   GND      → common
  *
  * Architecture:
- *   - Rotation: ISR on S1 falling edge, reads S2 for direction
+ *   - Rotation: ISR on any edge of S1 and S2, Gray-code state machine
  *   - Button:   Polled from encoder_poll() with software debounce
  *   - Events:   FreeRTOS queue, drained by UI task each frame
+ *   - Accel:    encoder_accel_mult() scales value edits when spinning fast
  *
  * Thread Safety:
  *   encoder_init() must be called from app_main (before tasks start).
@@ -48,5 +49,11 @@ void encoder_init(void);
  * @return true if an event was produced, false if nothing happened
  */
 bool encoder_poll(encoder_event_t *event);
+
+/**
+ * Value-edit multiplier for the rotation event just returned by encoder_poll().
+ * 1 = one careful click, 2/5/10 = spinning. Navigation should ignore this.
+ */
+int encoder_accel_mult(void);
 
 #endif // ENCODER_H
